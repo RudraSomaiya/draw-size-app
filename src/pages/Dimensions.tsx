@@ -1,0 +1,174 @@
+import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ArrowLeft, Check, Ruler } from "lucide-react";
+import { toast } from "sonner";
+
+const Dimensions = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [height, setHeight] = useState("");
+  const [width, setWidth] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  const { originalImage, annotatedImage } = location.state || {};
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!height || !width) {
+      toast.error("Please enter both height and width");
+      return;
+    }
+
+    if (parseFloat(height) <= 0 || parseFloat(width) <= 0) {
+      toast.error("Dimensions must be greater than 0");
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    // Simulate processing
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    toast.success("Dimensions saved successfully!");
+    setIsSubmitting(false);
+    
+    // Here you would typically send the data to your backend
+    console.log({
+      height: parseFloat(height),
+      width: parseFloat(width),
+      originalImage,
+      annotatedImage
+    });
+  };
+
+  const handleBack = () => {
+    navigate('/drawing', { state: { imageData: originalImage } });
+  };
+
+  if (!originalImage || !annotatedImage) {
+    return (
+      <div className="min-h-screen bg-gradient-surface flex items-center justify-center p-4">
+        <div className="text-center">
+          <p className="text-text-soft mb-4">Missing image data</p>
+          <Button onClick={() => navigate('/')}>
+            Start Over
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-surface p-4">
+      <div className="max-w-md mx-auto pt-4">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6 animate-fade-in">
+          <Button variant="ghost" size="icon" onClick={handleBack}>
+            <ArrowLeft size={20} />
+          </Button>
+          <h1 className="text-xl font-bold text-foreground">
+            Enter Dimensions
+          </h1>
+          <div className="w-10" />
+        </div>
+
+        {/* Preview Image */}
+        <Card className="p-4 mb-6 shadow-card animate-bounce-in">
+          <div className="relative rounded-lg overflow-hidden">
+            <img 
+              src={annotatedImage} 
+              alt="Annotated" 
+              className="w-full h-48 object-cover"
+            />
+          </div>
+        </Card>
+
+        {/* Dimensions Form */}
+        <Card className="p-6 shadow-card animate-fade-in">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="p-3 bg-primary-light rounded-xl">
+              <Ruler className="text-primary" size={24} />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">Actual Dimensions</h2>
+              <p className="text-sm text-text-soft">Enter the real-world measurements</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="height" className="text-sm font-medium text-foreground">
+                Height (meters)
+              </Label>
+              <Input
+                id="height"
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="e.g., 2.5"
+                value={height}
+                onChange={(e) => setHeight(e.target.value)}
+                className="h-12 rounded-xl border-border focus:border-primary"
+                disabled={isSubmitting}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="width" className="text-sm font-medium text-foreground">
+                Width (meters)
+              </Label>
+              <Input
+                id="width"
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="e.g., 3.0"
+                value={width}
+                onChange={(e) => setWidth(e.target.value)}
+                className="h-12 rounded-xl border-border focus:border-primary"
+                disabled={isSubmitting}
+              />
+            </div>
+
+            <Button
+              type="submit"
+              size="lg"
+              className="w-full mt-6"
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary-foreground border-t-transparent mr-2" />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Check size={20} />
+                  Complete
+                </>
+              )}
+            </Button>
+          </form>
+        </Card>
+
+        {/* Summary */}
+        {height && width && (
+          <Card className="p-4 mt-4 bg-primary-light border-primary/20 animate-fade-in">
+            <div className="text-center">
+              <p className="text-sm text-primary font-medium">
+                Total Area: {(parseFloat(height) * parseFloat(width)).toFixed(2)} m²
+              </p>
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default Dimensions;
