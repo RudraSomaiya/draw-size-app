@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Canvas as FabricCanvas, PencilBrush, FabricImage, Rect } from "fabric";
+import { Canvas as FabricCanvas, PencilBrush, FabricImage } from "fabric";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Pencil, Eraser, Undo, Trash2, ArrowRight, ArrowLeft } from "lucide-react";
@@ -14,7 +14,6 @@ const DrawingCanvas = () => {
   const [history, setHistory] = useState<any[]>([]);
   const [brushWidth, setBrushWidth] = useState([15]);
   const [backgroundImage, setBackgroundImage] = useState<FabricImage | null>(null);
-  const [selectionOverlay, setSelectionOverlay] = useState<Rect | null>(null);
   const imageData = location.state?.imageData;
 
   useEffect(() => {
@@ -69,15 +68,14 @@ const DrawingCanvas = () => {
   useEffect(() => {
     if (!fabricCanvas) return;
 
-    fabricCanvas.isDrawingMode = true;
-    fabricCanvas.freeDrawingBrush.width = brushWidth[0];
-    
     if (activeTool === "draw") {
+      fabricCanvas.isDrawingMode = true;
       fabricCanvas.freeDrawingBrush.color = "rgba(239, 68, 68, 0.4)";
     } else if (activeTool === "erase") {
-      // For eraser, use transparent color to not show stroke while drawing
-      fabricCanvas.freeDrawingBrush.color = "transparent";
+      fabricCanvas.isDrawingMode = true;
+      fabricCanvas.freeDrawingBrush.color = "rgba(255, 255, 255, 1)";
     }
+    fabricCanvas.freeDrawingBrush.width = brushWidth[0];
   }, [activeTool, fabricCanvas, brushWidth]);
 
   const handleToolChange = (tool: "draw" | "erase") => {
@@ -147,27 +145,29 @@ const DrawingCanvas = () => {
 
     const handlePathCreated = (e: any) => {
       if (activeTool === "erase") {
-        // For eraser, create an erasing stroke that cuts through selection
+        // For eraser, remove overlapping strokes instead of adding white strokes
         const eraserPath = e.path;
-        eraserPath.set({
-          globalCompositeOperation: 'destination-out',
-          stroke: 'rgba(0,0,0,1)',
-          fill: '',
-          opacity: 1
+        const objectsToRemove: any[] = [];
+        
+        fabricCanvas.getObjects().forEach((obj: any) => {
+          if (obj !== backgroundImage && obj !== eraserPath && obj.type === 'path') {
+            // Check if this object intersects with the eraser path
+            if (obj.intersectsWithObject(eraserPath)) {
+              objectsToRemove.push(obj);
+            }
+          }
         });
         
-        // Add to history as a proper eraser stroke
-        setHistory(prev => [...prev, eraserPath]);
+        // Remove the eraser path itself and intersecting objects
+        fabricCanvas.remove(eraserPath);
+        objectsToRemove.forEach(obj => {
+          fabricCanvas.remove(obj);
+          // Remove from history too
+          setHistory(prev => prev.filter(historyObj => historyObj !== obj));
+        });
+        
         fabricCanvas.renderAll();
       } else {
-        // For drawing, ensure consistent opacity without layering
-        const drawPath = e.path;
-        drawPath.set({
-          globalCompositeOperation: 'source-over',
-          stroke: 'rgba(239, 68, 68, 0.4)',
-          fill: '',
-          opacity: 1
-        });
         saveToHistory(e);
       }
     };
