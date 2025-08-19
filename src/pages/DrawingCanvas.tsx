@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Canvas as FabricCanvas, PencilBrush } from "fabric";
+import { Canvas as FabricCanvas, PencilBrush, FabricImage } from "fabric";
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import { Pencil, Eraser, Undo, Trash2, ArrowRight, ArrowLeft } from "lucide-react";
 
 const DrawingCanvas = () => {
@@ -11,6 +12,7 @@ const DrawingCanvas = () => {
   const [fabricCanvas, setFabricCanvas] = useState<FabricCanvas | null>(null);
   const [activeTool, setActiveTool] = useState<"draw" | "erase">("draw");
   const [history, setHistory] = useState<string[]>([]);
+  const [brushWidth, setBrushWidth] = useState([15]);
   const imageData = location.state?.imageData;
 
   useEffect(() => {
@@ -23,19 +25,29 @@ const DrawingCanvas = () => {
     });
 
     // Load the background image
-    const img = new Image();
-    img.onload = () => {
+    FabricImage.fromURL(imageData).then((img) => {
       const scaleX = 350 / img.width;
       const scaleY = 400 / img.height;
-      canvas.backgroundImage = imageData;
+      const scale = Math.min(scaleX, scaleY);
+      
+      img.set({
+        scaleX: scale,
+        scaleY: scale,
+        left: (350 - img.width * scale) / 2,
+        top: (400 - img.height * scale) / 2,
+        selectable: false,
+        evented: false
+      });
+      
+      canvas.add(img);
+      canvas.sendObjectToBack(img);
       canvas.renderAll();
-    };
-    img.src = imageData;
+    });
 
-    // Configure drawing brush
+    // Configure drawing brush for selection
     canvas.freeDrawingBrush = new PencilBrush(canvas);
-    canvas.freeDrawingBrush.color = "#3b82f6";
-    canvas.freeDrawingBrush.width = 3;
+    canvas.freeDrawingBrush.color = "rgba(239, 68, 68, 0.4)"; // Semi-transparent red
+    canvas.freeDrawingBrush.width = brushWidth[0];
     canvas.isDrawingMode = true;
 
     // Save initial state
@@ -55,22 +67,18 @@ const DrawingCanvas = () => {
 
     if (activeTool === "draw") {
       fabricCanvas.isDrawingMode = true;
-      fabricCanvas.freeDrawingBrush.color = "#3b82f6";
+      fabricCanvas.freeDrawingBrush.color = "rgba(239, 68, 68, 0.4)"; // Semi-transparent red for selection
     } else if (activeTool === "erase") {
       fabricCanvas.isDrawingMode = true;
-      fabricCanvas.freeDrawingBrush.color = "#ffffff";
-      fabricCanvas.freeDrawingBrush.width = 10;
+      fabricCanvas.freeDrawingBrush.color = "rgba(255, 255, 255, 1)"; // White for erasing
     }
-  }, [activeTool, fabricCanvas]);
+    fabricCanvas.freeDrawingBrush.width = brushWidth[0];
+  }, [activeTool, fabricCanvas, brushWidth]);
 
   const handleToolChange = (tool: "draw" | "erase") => {
     setActiveTool(tool);
     if (fabricCanvas) {
-      if (tool === "draw") {
-        fabricCanvas.freeDrawingBrush.width = 3;
-      } else {
-        fabricCanvas.freeDrawingBrush.width = 10;
-      }
+      fabricCanvas.freeDrawingBrush.width = brushWidth[0];
     }
   };
 
@@ -92,16 +100,28 @@ const DrawingCanvas = () => {
       fabricCanvas.clear();
       
       // Reload background image
-      const img = new Image();
-      img.onload = () => {
-        fabricCanvas.backgroundImage = imageData;
+      FabricImage.fromURL(imageData).then((img) => {
+        const scaleX = 350 / img.width;
+        const scaleY = 400 / img.height;
+        const scale = Math.min(scaleX, scaleY);
+        
+        img.set({
+          scaleX: scale,
+          scaleY: scale,
+          left: (350 - img.width * scale) / 2,
+          top: (400 - img.height * scale) / 2,
+          selectable: false,
+          evented: false
+        });
+        
+        fabricCanvas.add(img);
+        fabricCanvas.sendObjectToBack(img);
         fabricCanvas.renderAll();
         
         setTimeout(() => {
           setHistory([fabricCanvas.toJSON()]);
         }, 100);
-      };
-      img.src = imageData;
+      });
     }
   };
 
@@ -209,6 +229,21 @@ const DrawingCanvas = () => {
           >
             <Trash2 size={20} />
           </Button>
+        </div>
+
+        {/* Brush Width Slider */}
+        <div className="mb-6 bg-surface rounded-xl p-4 shadow-card">
+          <label className="block text-sm font-medium text-foreground mb-3">
+            Selection Size: {brushWidth[0]}px
+          </label>
+          <Slider
+            value={brushWidth}
+            onValueChange={setBrushWidth}
+            max={50}
+            min={5}
+            step={1}
+            className="w-full"
+          />
         </div>
 
         {/* Next Button */}
