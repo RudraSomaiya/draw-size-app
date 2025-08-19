@@ -11,8 +11,9 @@ const DrawingCanvas = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [fabricCanvas, setFabricCanvas] = useState<FabricCanvas | null>(null);
   const [activeTool, setActiveTool] = useState<"draw" | "erase">("draw");
-  const [history, setHistory] = useState<string[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
   const [brushWidth, setBrushWidth] = useState([15]);
+  const [backgroundImage, setBackgroundImage] = useState<FabricImage | null>(null);
   const imageData = location.state?.imageData;
 
   useEffect(() => {
@@ -36,24 +37,26 @@ const DrawingCanvas = () => {
         left: (350 - img.width * scale) / 2,
         top: (400 - img.height * scale) / 2,
         selectable: false,
-        evented: false
+        evented: false,
+        excludeFromExport: false
       });
       
       canvas.add(img);
       canvas.sendObjectToBack(img);
+      setBackgroundImage(img);
       canvas.renderAll();
+      
+      // Save initial state (empty selection)
+      setTimeout(() => {
+        setHistory([]);
+      }, 100);
     });
 
-    // Configure drawing brush for selection
+    // Configure drawing brush for selection with destination-over for proper blending
     canvas.freeDrawingBrush = new PencilBrush(canvas);
-    canvas.freeDrawingBrush.color = "rgba(239, 68, 68, 0.4)"; // Semi-transparent red
+    canvas.freeDrawingBrush.color = "rgba(239, 68, 68, 0.4)";
     canvas.freeDrawingBrush.width = brushWidth[0];
     canvas.isDrawingMode = true;
-
-    // Save initial state
-    setTimeout(() => {
-      setHistory([canvas.toJSON()]);
-    }, 100);
 
     setFabricCanvas(canvas);
 
@@ -67,10 +70,10 @@ const DrawingCanvas = () => {
 
     if (activeTool === "draw") {
       fabricCanvas.isDrawingMode = true;
-      fabricCanvas.freeDrawingBrush.color = "rgba(239, 68, 68, 0.4)"; // Semi-transparent red for selection
+      fabricCanvas.freeDrawingBrush.color = "rgba(239, 68, 68, 0.4)";
     } else if (activeTool === "erase") {
       fabricCanvas.isDrawingMode = true;
-      fabricCanvas.freeDrawingBrush.color = "rgba(255, 255, 255, 1)"; // White for erasing
+      fabricCanvas.freeDrawingBrush.color = "rgba(255, 255, 255, 1)";
     }
     fabricCanvas.freeDrawingBrush.width = brushWidth[0];
   }, [activeTool, fabricCanvas, brushWidth]);
@@ -83,45 +86,32 @@ const DrawingCanvas = () => {
   };
 
   const handleUndo = () => {
-    if (history.length > 1 && fabricCanvas) {
+    if (history.length > 0 && fabricCanvas && backgroundImage) {
       const newHistory = [...history];
       newHistory.pop();
-      const previousState = newHistory[newHistory.length - 1];
       
-      fabricCanvas.loadFromJSON(previousState, () => {
-        fabricCanvas.renderAll();
-        setHistory(newHistory);
+      // Clear canvas and re-add background
+      fabricCanvas.clear();
+      fabricCanvas.add(backgroundImage);
+      fabricCanvas.sendObjectToBack(backgroundImage);
+      
+      // Re-add all stroke objects from history
+      newHistory.forEach(strokeData => {
+        fabricCanvas.add(strokeData);
       });
+      
+      fabricCanvas.renderAll();
+      setHistory(newHistory);
     }
   };
 
   const handleClearAll = () => {
-    if (fabricCanvas && imageData) {
+    if (fabricCanvas && backgroundImage) {
       fabricCanvas.clear();
-      
-      // Reload background image
-      FabricImage.fromURL(imageData).then((img) => {
-        const scaleX = 350 / img.width;
-        const scaleY = 400 / img.height;
-        const scale = Math.min(scaleX, scaleY);
-        
-        img.set({
-          scaleX: scale,
-          scaleY: scale,
-          left: (350 - img.width * scale) / 2,
-          top: (400 - img.height * scale) / 2,
-          selectable: false,
-          evented: false
-        });
-        
-        fabricCanvas.add(img);
-        fabricCanvas.sendObjectToBack(img);
-        fabricCanvas.renderAll();
-        
-        setTimeout(() => {
-          setHistory([fabricCanvas.toJSON()]);
-        }, 100);
-      });
+      fabricCanvas.add(backgroundImage);
+      fabricCanvas.sendObjectToBack(backgroundImage);
+      fabricCanvas.renderAll();
+      setHistory([]);
     }
   };
 
@@ -146,17 +136,48 @@ const DrawingCanvas = () => {
   useEffect(() => {
     if (!fabricCanvas) return;
 
-    const saveToHistory = () => {
-      const currentState = fabricCanvas.toJSON();
-      setHistory(prev => [...prev, currentState]);
+    const saveToHistory = (e: any) => {
+      // Only save stroke objects, not the background image
+      if (e.path && e.path !== backgroundImage) {
+        setHistory(prev => [...prev, e.path]);
+      }
     };
 
-    fabricCanvas.on('path:created', saveToHistory);
+    const handlePathCreated = (e: any) => {
+      if (activeTool === "erase") {
+        // For eraser, remove overlapping strokes instead of adding white strokes
+        const eraserPath = e.path;
+        const objectsToRemove: any[] = [];
+        
+        fabricCanvas.getObjects().forEach((obj: any) => {
+          if (obj !== backgroundImage && obj !== eraserPath && obj.type === 'path') {
+            // Check if this object intersects with the eraser path
+            if (obj.intersectsWithObject(eraserPath)) {
+              objectsToRemove.push(obj);
+            }
+          }
+        });
+        
+        // Remove the eraser path itself and intersecting objects
+        fabricCanvas.remove(eraserPath);
+        objectsToRemove.forEach(obj => {
+          fabricCanvas.remove(obj);
+          // Remove from history too
+          setHistory(prev => prev.filter(historyObj => historyObj !== obj));
+        });
+        
+        fabricCanvas.renderAll();
+      } else {
+        saveToHistory(e);
+      }
+    };
+
+    fabricCanvas.on('path:created', handlePathCreated);
     
     return () => {
-      fabricCanvas.off('path:created', saveToHistory);
+      fabricCanvas.off('path:created', handlePathCreated);
     };
-  }, [fabricCanvas]);
+  }, [fabricCanvas, backgroundImage, activeTool]);
 
   if (!imageData) {
     return (
@@ -216,7 +237,7 @@ const DrawingCanvas = () => {
             variant="tool"
             size="tool"
             onClick={handleUndo}
-            disabled={history.length <= 1}
+            disabled={history.length === 0}
             className="aspect-square"
           >
             <Undo size={20} />
