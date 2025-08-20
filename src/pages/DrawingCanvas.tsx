@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Canvas as FabricCanvas, FabricImage } from "fabric";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Pencil, Eraser, Undo, Trash2, ArrowRight, ArrowLeft } from "lucide-react";
+import { Pencil, Eraser, Undo, Trash2, ArrowRight, ArrowLeft, RotateCcw } from "lucide-react";
 
 // Action types for drawing history - each action can be replayed to rebuild the mask
 type DrawAction = {
@@ -36,6 +36,8 @@ const DrawingCanvas = () => {
   const [backgroundImage, setBackgroundImage] = useState<FabricImage | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[]>([]);
+  const [imageScale, setImageScale] = useState(1);
+  const [imageBounds, setImageBounds] = useState({ x: 0, y: 0, width: 350, height: 400 });
   
   const imageData = location.state?.imageData;
 
@@ -43,21 +45,22 @@ const DrawingCanvas = () => {
   useEffect(() => {
     if (!canvasRef.current || !overlayCanvasRef.current || !maskCanvasRef.current || !imageData) return;
 
-    // Initialize main canvas for image display only
+    // Initialize main canvas for image display with zoom/pan enabled
     const canvas = new FabricCanvas(canvasRef.current, {
       width: 350,
       height: 400,
       backgroundColor: "#ffffff",
       selection: false,
-      interactive: false, // Image layer should not receive events
+      allowTouchScrolling: true,
     });
 
-    // Initialize overlay canvas for drawing interaction (transparent)
+    // Initialize overlay canvas for drawing interaction with zoom/pan
     const overlay = new FabricCanvas(overlayCanvasRef.current, {
       width: 350,
       height: 400,
       backgroundColor: "transparent",
       selection: false,
+      allowTouchScrolling: true,
     });
 
     // Get overlay context for manual rendering of selection overlay
@@ -86,14 +89,27 @@ const DrawingCanvas = () => {
       const scaleY = 400 / img.height;
       const scale = Math.min(scaleX, scaleY);
       
+      const scaledWidth = img.width * scale;
+      const scaledHeight = img.height * scale;
+      const left = (350 - scaledWidth) / 2;
+      const top = (400 - scaledHeight) / 2;
+      
       img.set({
         scaleX: scale,
         scaleY: scale,
-        left: (350 - img.width * scale) / 2,
-        top: (400 - img.height * scale) / 2,
+        left,
+        top,
         selectable: false,
         evented: false,
         excludeFromExport: false
+      });
+      
+      // Store image bounds for drawing area
+      setImageBounds({
+        x: left,
+        y: top,
+        width: scaledWidth,
+        height: scaledHeight
       });
       
       canvas.add(img);
@@ -108,6 +124,77 @@ const DrawingCanvas = () => {
     // Disable drawing mode - we handle drawing manually
     canvas.isDrawingMode = false;
     overlay.isDrawingMode = false;
+
+    // Setup zoom/pan with synchronization between canvases
+    const setupSyncedZoomPan = () => {
+      let isDragging = false;
+      let lastPosX = 0;
+      let lastPosY = 0;
+
+      // Zoom handling for overlay canvas (main interaction layer)
+      overlay.on('mouse:wheel', (opt) => {
+        const delta = opt.e.deltaY;
+        let zoom = overlay.getZoom();
+        zoom *= 0.999 ** delta;
+        
+        if (zoom > 3) zoom = 3;
+        if (zoom < 0.5) zoom = 0.5;
+        
+        const pointer = overlay.getPointer(opt.e);
+        overlay.zoomToPoint(pointer, zoom);
+        
+        // Sync with main canvas
+        canvas.zoomToPoint(pointer, zoom);
+        canvas.setViewportTransform([...overlay.viewportTransform!]);
+        canvas.requestRenderAll();
+        
+        setImageScale(zoom);
+        opt.e.preventDefault();
+        opt.e.stopPropagation();
+      });
+
+      // Pan handling for overlay canvas
+      overlay.on('mouse:down', (opt) => {
+        const evt = opt.e;
+        if (evt.altKey === true || evt.ctrlKey === true) {
+          isDragging = true;
+          overlay.selection = false;
+          const pointer = overlay.getPointer(evt);
+          lastPosX = pointer.x;
+          lastPosY = pointer.y;
+        }
+      });
+
+      overlay.on('mouse:move', (opt) => {
+        if (isDragging) {
+          const pointer = overlay.getPointer(opt.e);
+          const vpt = overlay.viewportTransform;
+          if (vpt) {
+            vpt[4] += pointer.x - lastPosX;
+            vpt[5] += pointer.y - lastPosY;
+            overlay.requestRenderAll();
+            
+            // Sync with main canvas
+            canvas.setViewportTransform([...vpt]);
+            canvas.requestRenderAll();
+            
+            lastPosX = pointer.x;
+            lastPosY = pointer.y;
+          }
+        }
+      });
+
+      overlay.on('mouse:up', () => {
+        if (isDragging) {
+          overlay.setViewportTransform(overlay.viewportTransform!);
+          canvas.setViewportTransform([...overlay.viewportTransform!]);
+          isDragging = false;
+          overlay.selection = true;
+        }
+      });
+    };
+
+    setupSyncedZoomPan();
 
     setFabricCanvas(canvas);
     setOverlayCanvas(overlay);
@@ -178,13 +265,16 @@ const DrawingCanvas = () => {
     if (!overlayCanvas) return;
 
     const handleMouseDown = (e: any) => {
+      // Don't start drawing if user is panning (alt/ctrl key)
+      if (e.e.altKey || e.e.ctrlKey) return;
+      
       setIsDrawing(true);
       const pointer = overlayCanvas.getPointer(e.e);
       setCurrentPath([{ x: pointer.x, y: pointer.y }]);
     };
 
     const handleMouseMove = (e: any) => {
-      if (!isDrawing) return;
+      if (!isDrawing || e.e.altKey || e.e.ctrlKey) return;
       
       const pointer = overlayCanvas.getPointer(e.e);
       const newPath = [...currentPath, { x: pointer.x, y: pointer.y }];
@@ -250,6 +340,21 @@ const DrawingCanvas = () => {
   // Handle clear all - reset mask and history
   const handleClearAll = () => {
     setActionHistory([]);
+  };
+
+  // Reset zoom and pan to fit image
+  const handleResetView = () => {
+    if (!fabricCanvas || !overlayCanvas || !backgroundImage) return;
+    
+    // Reset both canvases to default view
+    fabricCanvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    overlayCanvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    fabricCanvas.setZoom(1);
+    overlayCanvas.setZoom(1);
+    setImageScale(1);
+    
+    fabricCanvas.renderAll();
+    overlayCanvas.renderAll();
   };
 
   // Generate final image by combining original image with selection overlay
@@ -340,7 +445,7 @@ const DrawingCanvas = () => {
         </div>
 
         {/* Drawing Tools */}
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-5 gap-3 mb-6">
           <Button
             variant={activeTool === "draw" ? "default" : "tool"}
             size="tool"
@@ -374,6 +479,15 @@ const DrawingCanvas = () => {
           >
             <Trash2 size={20} />
           </Button>
+          <Button
+            variant="tool"
+            size="tool"
+            onClick={handleResetView}
+            className="aspect-square"
+            title="Reset View"
+          >
+            <RotateCcw size={20} />
+          </Button>
         </div>
 
         {/* Brush Width Slider */}
@@ -389,6 +503,11 @@ const DrawingCanvas = () => {
             step={1}
             className="w-full"
           />
+          {imageScale !== 1 && (
+            <p className="text-xs text-text-soft mt-2">
+              Zoom: {Math.round(imageScale * 100)}% • Hold Alt/Ctrl + drag to pan
+            </p>
+          )}
         </div>
 
         {/* Next Button */}

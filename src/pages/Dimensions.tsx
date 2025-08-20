@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, Check, Ruler } from "lucide-react";
+import { ArrowLeft, Check, Ruler, ArrowLeftRight, ArrowUpDown } from "lucide-react";
 import { toast } from "sonner";
 
 const Dimensions = () => {
@@ -77,14 +77,35 @@ const Dimensions = () => {
           <div className="w-10" />
         </div>
 
-        {/* Preview Image */}
-        <Card className="p-4 mb-6 shadow-card animate-bounce-in">
-          <div className="relative rounded-lg overflow-hidden">
-            <img 
-              src={annotatedImage} 
-              alt="Annotated" 
-              className="w-full h-48 object-cover"
-            />
+        {/* Preview Image with Dimension Arrows */}
+        <Card className="p-6 mb-6 shadow-card animate-bounce-in">
+          <div className="relative">
+            {/* Width Arrow - Horizontal */}
+            <div className="absolute -top-8 left-0 right-0 flex items-center justify-center">
+              <div className="flex items-center text-text-soft">
+                <ArrowLeftRight size={16} />
+                <span className="mx-2 text-xs font-medium">Width</span>
+                <ArrowLeftRight size={16} />
+              </div>
+            </div>
+            
+            {/* Height Arrow - Vertical */}
+            <div className="absolute -left-8 top-0 bottom-0 flex items-center justify-center">
+              <div className="flex flex-col items-center text-text-soft transform -rotate-90">
+                <ArrowUpDown size={16} />
+                <span className="mx-2 text-xs font-medium">Height</span>
+                <ArrowUpDown size={16} />
+              </div>
+            </div>
+
+            {/* Image */}
+            <div className="relative rounded-lg overflow-hidden bg-surface-soft">
+              <img 
+                src={annotatedImage} 
+                alt="Annotated" 
+                className="w-full h-48 object-contain"
+              />
+            </div>
           </div>
         </Card>
 
@@ -102,7 +123,8 @@ const Dimensions = () => {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="height" className="text-sm font-medium text-foreground">
+              <Label htmlFor="height" className="text-sm font-medium text-foreground flex items-center gap-2">
+                <ArrowUpDown size={16} className="text-text-soft" />
                 Height (meters)
               </Label>
               <Input
@@ -119,7 +141,8 @@ const Dimensions = () => {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="width" className="text-sm font-medium text-foreground">
+              <Label htmlFor="width" className="text-sm font-medium text-foreground flex items-center gap-2">
+                <ArrowLeftRight size={16} className="text-text-soft" />
                 Width (meters)
               </Label>
               <Input
