@@ -208,6 +208,21 @@ const DrawingCanvas = () => {
     renderCanvas();
   }, [renderCanvas, transform, loadedImage]);
 
+  // Post-clamp any transform change using current viewport to prevent drifting off-screen
+  useEffect(() => {
+    if (!loadedImage || !canvasRef.current) return;
+    const wrap = canvasWrapRef.current;
+    const rect = wrap?.getBoundingClientRect();
+    const vw = Math.floor(rect?.width ?? wrap?.clientWidth ?? canvasRef.current.clientWidth ?? canvasRef.current.width);
+    const vh = Math.floor(rect?.height ?? wrap?.clientHeight ?? canvasRef.current.clientHeight ?? canvasRef.current.height);
+    if (!vw || !vh) return;
+    const clamped = clampTransform(transform, loadedImage.width, loadedImage.height, vw, vh, true);
+    const close = (a: number, b: number) => Math.abs(a - b) < 0.25; // avoid loops on tiny diffs
+    if (!close(clamped.scale, transform.scale) || !close(clamped.translateX, transform.translateX) || !close(clamped.translateY, transform.translateY)) {
+      setTransform(clamped);
+    }
+  }, [transform, loadedImage, clampTransform]);
+
   // Draw on mask function
   const drawOnMask = useCallback((points: { x: number; y: number }[], strokeWidthScreen: number, isErase: boolean) => {
     if (!maskCanvasRef.current || !loadedImage || points.length < 2) return;
