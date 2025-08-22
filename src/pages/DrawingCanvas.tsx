@@ -37,7 +37,8 @@ const DrawingCanvas = () => {
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[]>([]);
   const [imageScale, setImageScale] = useState(1);
-  const [imageBounds, setImageBounds] = useState({ x: 0, y: 0, width: 350, height: 400 });
+  const [imageBounds, setImageBounds] = useState({ x: 0, y: 0, width: 0, height: 0 });
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   
   const imageData = location.state?.imageData;
 
@@ -45,71 +46,91 @@ const DrawingCanvas = () => {
   useEffect(() => {
     if (!canvasRef.current || !overlayCanvasRef.current || !maskCanvasRef.current || !imageData) return;
 
-    // Initialize main canvas for image display with zoom/pan enabled
-    const canvas = new FabricCanvas(canvasRef.current, {
-      width: 350,
-      height: 400,
-      backgroundColor: "#ffffff",
-      selection: false,
-      allowTouchScrolling: true,
-    });
+    let canvas: FabricCanvas;
+    let overlay: FabricCanvas;
 
-    // Initialize overlay canvas for drawing interaction with zoom/pan
-    const overlay = new FabricCanvas(overlayCanvasRef.current, {
-      width: 350,
-      height: 400,
-      backgroundColor: "transparent",
-      selection: false,
-      allowTouchScrolling: true,
-    });
-
-    // Get overlay context for manual rendering of selection overlay
-    const overlayCtx = overlayCanvasRef.current.getContext('2d');
-    if (overlayCtx) {
-      setOverlayContext(overlayCtx);
-    }
-
-    // Initialize mask canvas (offscreen binary mask)
-    const maskCanvas = maskCanvasRef.current;
-    maskCanvas.width = 350;
-    maskCanvas.height = 400;
-    const maskCtx = maskCanvas.getContext('2d');
-    
-    if (maskCtx) {
-      // Clear mask to transparent (no selection initially)
-      maskCtx.clearRect(0, 0, 350, 400);
-      maskCtx.lineCap = 'round';
-      maskCtx.lineJoin = 'round';
-      setMaskContext(maskCtx);
-    }
-
-    // Load the background image
+    // Load the background image first to get dimensions
     FabricImage.fromURL(imageData).then((img) => {
-      const scaleX = 350 / img.width;
-      const scaleY = 400 / img.height;
-      const scale = Math.min(scaleX, scaleY);
+      // Calculate container size - fit image to max 350x400 while maintaining aspect ratio
+      const maxWidth = 350;
+      const maxHeight = 400;
+      const imgAspectRatio = img.width / img.height;
+      const containerAspectRatio = maxWidth / maxHeight;
       
-      const scaledWidth = img.width * scale;
-      const scaledHeight = img.height * scale;
-      const left = (350 - scaledWidth) / 2;
-      const top = (400 - scaledHeight) / 2;
+      let canvasWidth: number;
+      let canvasHeight: number;
       
+      if (imgAspectRatio > containerAspectRatio) {
+        // Image is wider - fit by width
+        canvasWidth = maxWidth;
+        canvasHeight = maxWidth / imgAspectRatio;
+      } else {
+        // Image is taller - fit by height
+        canvasHeight = maxHeight;
+        canvasWidth = maxHeight * imgAspectRatio;
+      }
+      
+      setCanvasSize({ width: canvasWidth, height: canvasHeight });
+      
+      // Initialize main canvas for image display
+      canvas = new FabricCanvas(canvasRef.current!, {
+        width: canvasWidth,
+        height: canvasHeight,
+        backgroundColor: "#ffffff",
+        selection: false,
+        allowTouchScrolling: true,
+      });
+
+      // Initialize overlay canvas for drawing interaction
+      overlay = new FabricCanvas(overlayCanvasRef.current!, {
+        width: canvasWidth,
+        height: canvasHeight,
+        backgroundColor: "transparent",
+        selection: false,
+        allowTouchScrolling: true,
+      });
+
+      // Disable drawing mode - we handle drawing manually
+      canvas.isDrawingMode = false;
+      overlay.isDrawingMode = false;
+
+      // Get overlay context for manual rendering of selection overlay
+      const overlayCtx = overlayCanvasRef.current!.getContext('2d');
+      if (overlayCtx) {
+        setOverlayContext(overlayCtx);
+      }
+
+      // Initialize mask canvas (offscreen binary mask) - same size as image
+      const maskCanvas = maskCanvasRef.current!;
+      maskCanvas.width = canvasWidth;
+      maskCanvas.height = canvasHeight;
+      const maskCtx = maskCanvas.getContext('2d');
+      
+      if (maskCtx) {
+        // Clear mask to transparent (no selection initially)
+        maskCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+        maskCtx.lineCap = 'round';
+        maskCtx.lineJoin = 'round';
+        setMaskContext(maskCtx);
+      }
+      
+      // Scale image to fill the entire canvas
       img.set({
-        scaleX: scale,
-        scaleY: scale,
-        left,
-        top,
+        scaleX: canvasWidth / img.width,
+        scaleY: canvasHeight / img.height,
+        left: 0,
+        top: 0,
         selectable: false,
         evented: false,
         excludeFromExport: false
       });
       
-      // Store image bounds for drawing area
+      // Store image bounds for drawing area (entire canvas now)
       setImageBounds({
-        x: left,
-        y: top,
-        width: scaledWidth,
-        height: scaledHeight
+        x: 0,
+        y: 0,
+        width: canvasWidth,
+        height: canvasHeight
       });
       
       canvas.add(img);
@@ -119,33 +140,65 @@ const DrawingCanvas = () => {
       
       // Initialize empty history
       setActionHistory([]);
+      
+      // Setup zoom/pan with bounds checking
+      setupSyncedZoomPan(canvas, overlay, canvasWidth, canvasHeight);
+      
+      setFabricCanvas(canvas);
+      setOverlayCanvas(overlay);
     });
 
-    // Disable drawing mode - we handle drawing manually
-    canvas.isDrawingMode = false;
-    overlay.isDrawingMode = false;
-
-    // Setup zoom/pan with synchronization between canvases
-    const setupSyncedZoomPan = () => {
+    // Setup zoom/pan with bounds checking
+    const setupSyncedZoomPan = (canvas: FabricCanvas, overlay: FabricCanvas, canvasWidth: number, canvasHeight: number) => {
       let isDragging = false;
       let lastPosX = 0;
       let lastPosY = 0;
+      
+      // Helper to clamp viewport within bounds
+      const clampViewport = (vpt: number[], zoom: number) => {
+        const scaledWidth = canvasWidth * zoom;
+        const scaledHeight = canvasHeight * zoom;
+        
+        // Clamp horizontal position
+        if (scaledWidth <= canvasWidth) {
+          // If zoomed out, center horizontally
+          vpt[4] = (canvasWidth - scaledWidth) / 2;
+        } else {
+          // If zoomed in, prevent image from leaving viewport
+          vpt[4] = Math.min(0, Math.max(vpt[4], canvasWidth - scaledWidth));
+        }
+        
+        // Clamp vertical position  
+        if (scaledHeight <= canvasHeight) {
+          // If zoomed out, center vertically
+          vpt[5] = (canvasHeight - scaledHeight) / 2;
+        } else {
+          // If zoomed in, prevent image from leaving viewport
+          vpt[5] = Math.min(0, Math.max(vpt[5], canvasHeight - scaledHeight));
+        }
+      };
 
-      // Zoom handling for overlay canvas (main interaction layer)
+      // Mouse wheel zoom handling
       overlay.on('mouse:wheel', (opt) => {
         const delta = opt.e.deltaY;
         let zoom = overlay.getZoom();
         zoom *= 0.999 ** delta;
         
+        // Limit zoom range
         if (zoom > 3) zoom = 3;
-        if (zoom < 0.5) zoom = 0.5;
+        if (zoom < 0.8) zoom = 0.8;
         
         const pointer = overlay.getPointer(opt.e);
         overlay.zoomToPoint(pointer, zoom);
         
+        // Apply bounds clamping
+        const vpt = [...overlay.viewportTransform!] as [number, number, number, number, number, number];
+        clampViewport(vpt, zoom);
+        overlay.setViewportTransform(vpt);
+        
         // Sync with main canvas
-        canvas.zoomToPoint(pointer, zoom);
-        canvas.setViewportTransform([...overlay.viewportTransform!]);
+        canvas.setZoom(zoom);
+        canvas.setViewportTransform(vpt);
         canvas.requestRenderAll();
         
         setImageScale(zoom);
@@ -153,7 +206,7 @@ const DrawingCanvas = () => {
         opt.e.stopPropagation();
       });
 
-      // Pan handling for overlay canvas
+      // Pan handling for mouse/trackpad
       overlay.on('mouse:down', (opt) => {
         const evt = opt.e;
         if (evt.altKey === true || evt.ctrlKey === true) {
@@ -162,46 +215,45 @@ const DrawingCanvas = () => {
           const pointer = overlay.getPointer(evt);
           lastPosX = pointer.x;
           lastPosY = pointer.y;
+          evt.preventDefault();
         }
       });
 
       overlay.on('mouse:move', (opt) => {
         if (isDragging) {
           const pointer = overlay.getPointer(opt.e);
-          const vpt = overlay.viewportTransform;
-          if (vpt) {
-            vpt[4] += pointer.x - lastPosX;
-            vpt[5] += pointer.y - lastPosY;
-            overlay.requestRenderAll();
-            
-            // Sync with main canvas
-            canvas.setViewportTransform([...vpt]);
-            canvas.requestRenderAll();
-            
-            lastPosX = pointer.x;
-            lastPosY = pointer.y;
-          }
+          const vpt = [...overlay.viewportTransform!] as [number, number, number, number, number, number];
+          vpt[4] += pointer.x - lastPosX;
+          vpt[5] += pointer.y - lastPosY;
+          
+          // Apply bounds clamping
+          clampViewport(vpt, overlay.getZoom());
+          
+          overlay.setViewportTransform(vpt);
+          overlay.requestRenderAll();
+          
+          // Sync with main canvas
+          canvas.setViewportTransform(vpt);
+          canvas.requestRenderAll();
+          
+          lastPosX = pointer.x;
+          lastPosY = pointer.y;
+          opt.e.preventDefault();
         }
       });
 
-      overlay.on('mouse:up', () => {
+      overlay.on('mouse:up', (opt) => {
         if (isDragging) {
-          overlay.setViewportTransform(overlay.viewportTransform!);
-          canvas.setViewportTransform([...overlay.viewportTransform!]);
           isDragging = false;
           overlay.selection = true;
+          opt.e.preventDefault();
         }
       });
     };
 
-    setupSyncedZoomPan();
-
-    setFabricCanvas(canvas);
-    setOverlayCanvas(overlay);
-
     return () => {
-      canvas.dispose();
-      overlay.dispose();
+      if (canvas) canvas.dispose();
+      if (overlay) overlay.dispose();
     };
   }, [imageData]);
 
@@ -227,14 +279,14 @@ const DrawingCanvas = () => {
 
   // Function to render selection overlay using mask
   const renderSelectionOverlay = useCallback(() => {
-    if (!overlayContext || !maskCanvasRef.current) return;
+    if (!overlayContext || !maskCanvasRef.current || !canvasSize.width || !canvasSize.height) return;
 
     // Clear overlay
-    overlayContext.clearRect(0, 0, 350, 400);
+    overlayContext.clearRect(0, 0, canvasSize.width, canvasSize.height);
     
     // Create red selection overlay
     overlayContext.fillStyle = 'rgba(239, 68, 68, 0.35)'; // Fixed opacity red
-    overlayContext.fillRect(0, 0, 350, 400);
+    overlayContext.fillRect(0, 0, canvasSize.width, canvasSize.height);
     
     // Use mask to clip the red overlay (only show red where mask is opaque)
     overlayContext.globalCompositeOperation = 'destination-in';
@@ -242,14 +294,14 @@ const DrawingCanvas = () => {
     
     // Reset composite operation
     overlayContext.globalCompositeOperation = 'source-over';
-  }, [overlayContext]);
+  }, [overlayContext, canvasSize]);
 
   // Rebuild mask from action history (used for undo)
   const rebuildMaskFromHistory = useCallback(() => {
-    if (!maskContext) return;
+    if (!maskContext || !canvasSize.width || !canvasSize.height) return;
 
     // Clear mask
-    maskContext.clearRect(0, 0, 350, 400);
+    maskContext.clearRect(0, 0, canvasSize.width, canvasSize.height);
     
     // Replay all actions to rebuild mask
     actionHistory.forEach(action => {
@@ -258,26 +310,48 @@ const DrawingCanvas = () => {
     
     // Update overlay
     renderSelectionOverlay();
-  }, [maskContext, actionHistory, drawOnMask, renderSelectionOverlay]);
+  }, [maskContext, actionHistory, drawOnMask, renderSelectionOverlay, canvasSize]);
 
   // Handle mouse/touch events for drawing
   useEffect(() => {
-    if (!overlayCanvas) return;
+    if (!overlayCanvas || !canvasSize.width || !canvasSize.height) return;
 
     const handleMouseDown = (e: any) => {
       // Don't start drawing if user is panning (alt/ctrl key)
       if (e.e.altKey || e.e.ctrlKey) return;
       
-      setIsDrawing(true);
       const pointer = overlayCanvas.getPointer(e.e);
-      setCurrentPath([{ x: pointer.x, y: pointer.y }]);
+      
+      // Check if pointer is within image bounds (considering zoom/pan)
+      const vpt = overlayCanvas.viewportTransform!;
+      const zoom = overlayCanvas.getZoom();
+      const imageX = (pointer.x - vpt[4]) / zoom;
+      const imageY = (pointer.y - vpt[5]) / zoom;
+      
+      // Only start drawing if within image bounds
+      if (imageX >= 0 && imageX <= canvasSize.width && imageY >= 0 && imageY <= canvasSize.height) {
+        setIsDrawing(true);
+        setCurrentPath([{ x: imageX, y: imageY }]);
+        e.e.preventDefault();
+      }
     };
 
     const handleMouseMove = (e: any) => {
       if (!isDrawing || e.e.altKey || e.e.ctrlKey) return;
       
       const pointer = overlayCanvas.getPointer(e.e);
-      const newPath = [...currentPath, { x: pointer.x, y: pointer.y }];
+      
+      // Transform coordinates to image space
+      const vpt = overlayCanvas.viewportTransform!;
+      const zoom = overlayCanvas.getZoom();
+      const imageX = (pointer.x - vpt[4]) / zoom;
+      const imageY = (pointer.y - vpt[5]) / zoom;
+      
+      // Clamp coordinates to image bounds
+      const clampedX = Math.max(0, Math.min(canvasSize.width, imageX));
+      const clampedY = Math.max(0, Math.min(canvasSize.height, imageY));
+      
+      const newPath = [...currentPath, { x: clampedX, y: clampedY }];
       setCurrentPath(newPath);
       
       // Draw current stroke on mask in real-time
@@ -286,6 +360,8 @@ const DrawingCanvas = () => {
         drawOnMask(lastTwoPoints, brushWidth[0], activeTool === 'erase');
         renderSelectionOverlay();
       }
+      
+      e.e.preventDefault();
     };
 
     const handleMouseUp = () => {
@@ -317,7 +393,7 @@ const DrawingCanvas = () => {
       overlayCanvas.off('mouse:move', handleMouseMove);
       overlayCanvas.off('mouse:up', handleMouseUp);
     };
-  }, [overlayCanvas, isDrawing, currentPath, brushWidth, activeTool, drawOnMask, renderSelectionOverlay]);
+  }, [overlayCanvas, isDrawing, currentPath, brushWidth, activeTool, drawOnMask, renderSelectionOverlay, canvasSize]);
 
   // Handle tool changes
   const handleToolChange = (tool: "draw" | "erase") => {
@@ -347,8 +423,9 @@ const DrawingCanvas = () => {
     if (!fabricCanvas || !overlayCanvas || !backgroundImage) return;
     
     // Reset both canvases to default view
-    fabricCanvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-    overlayCanvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    const resetTransform: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
+    fabricCanvas.setViewportTransform(resetTransform);
+    overlayCanvas.setViewportTransform(resetTransform);
     fabricCanvas.setZoom(1);
     overlayCanvas.setZoom(1);
     setImageScale(1);
@@ -359,12 +436,12 @@ const DrawingCanvas = () => {
 
   // Generate final image by combining original image with selection overlay
   const generateFinalImage = useCallback(() => {
-    if (!fabricCanvas || !overlayCanvasRef.current) return null;
+    if (!fabricCanvas || !overlayCanvasRef.current || !canvasSize.width || !canvasSize.height) return null;
 
     // Create a temporary canvas to combine image and selection
     const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = 350;
-    tempCanvas.height = 400;
+    tempCanvas.width = canvasSize.width;
+    tempCanvas.height = canvasSize.height;
     const tempCtx = tempCanvas.getContext('2d');
     
     if (!tempCtx) return null;
@@ -380,7 +457,7 @@ const DrawingCanvas = () => {
     img.src = fabricCanvasData;
     
     return tempCanvas.toDataURL();
-  }, [fabricCanvas]);
+  }, [fabricCanvas, canvasSize]);
 
   const handleNext = () => {
     const finalImage = generateFinalImage();
@@ -424,18 +501,46 @@ const DrawingCanvas = () => {
         </div>
 
         {/* Canvas Container - Stack canvases for layering */}
-        <div className="relative bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in">
+        <div 
+          className="relative bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in select-none"
+          style={{ 
+            width: canvasSize.width || 350, 
+            height: canvasSize.height || 400,
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            MozUserSelect: 'none',
+            msUserSelect: 'none'
+          }}
+          onDragStart={(e) => e.preventDefault()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
           {/* Background image canvas */}
           <canvas
             ref={canvasRef}
-            className="absolute inset-0"
-            style={{ display: 'block' }}
+            className="absolute inset-0 select-none"
+            style={{ 
+              display: 'block',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              MozUserSelect: 'none',
+              msUserSelect: 'none'
+            }}
+            onDragStart={(e) => e.preventDefault()}
           />
           {/* Selection overlay canvas */}
           <canvas
             ref={overlayCanvasRef}
-            className="absolute inset-0 touch-none"
-            style={{ display: 'block', pointerEvents: 'auto' }}
+            className="absolute inset-0 touch-none select-none"
+            style={{ 
+              display: 'block', 
+              pointerEvents: 'auto',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              MozUserSelect: 'none',
+              msUserSelect: 'none'
+            }}
+            onDragStart={(e) => e.preventDefault()}
+            onContextMenu={(e) => e.preventDefault()}
           />
           {/* Hidden mask canvas for binary mask storage */}
           <canvas
