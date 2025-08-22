@@ -561,9 +561,10 @@ const DrawingCanvas = () => {
 
         {/* Canvas Container */}
         <div ref={canvasWrapRef} className="relative w-full min-h-[60vh] bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in mx-auto">
+          {/* The drawing canvas (z-0 so overlays are clickable) */}
           <canvas
             ref={canvasRef}
-            className="absolute inset-0 touch-none"
+            className="absolute inset-0 z-0 touch-none"
             onPointerDown={onPointerDownWrapper}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
@@ -573,32 +574,60 @@ const DrawingCanvas = () => {
             style={{ cursor: activeTool === 'draw' ? 'crosshair' : 'grab' }}
             onContextMenu={(e) => e.preventDefault()}
           />
-          <Button
-            variant="tool"
-            size="tool"
-            onClick={handleUndo}
-            disabled={actionHistory.length === 0}
-            className="aspect-square"
-          >
-            <Undo size={20} />
-          </Button>
-          <Button
-            variant="tool"
-            size="tool"
-            onClick={handleClearAll}
-            className="aspect-square"
-          >
-            <Trash2 size={20} />
-          </Button>
-          <Button
-            variant="tool"
-            size="tool"
-            onClick={handleResetView}
-            className="aspect-square"
-            title="Reset View"
-          >
-            <RotateCcw size={20} />
-          </Button>
+
+          {/* Top-left action buttons */}
+          <div className="absolute top-3 left-3 z-10 pointer-events-auto flex items-center gap-2">
+            <Button
+              variant="tool"
+              size="tool"
+              onClick={handleUndo}
+              disabled={actionHistory.length === 0}
+              className="aspect-square"
+              title="Undo"
+            >
+              <Undo size={20} />
+            </Button>
+            <Button
+              variant="tool"
+              size="tool"
+              onClick={handleClearAll}
+              className="aspect-square"
+              title="Clear All"
+            >
+              <Trash2 size={20} />
+            </Button>
+            <Button
+              variant="tool"
+              size="tool"
+              onClick={handleResetView}
+              className="aspect-square"
+              title="Reset View"
+            >
+              <RotateCcw size={20} />
+            </Button>
+          </div>
+
+          {/* Top-right tool toggle (Draw / Erase) */}
+          <div className="absolute top-3 right-3 z-10 pointer-events-auto flex items-center gap-2">
+            <Button
+              variant={activeTool === 'draw' ? 'default' : 'tool'}
+              size="tool"
+              onClick={() => setActiveTool('draw')}
+              className="aspect-square"
+              title="Draw"
+            >
+              <Pencil size={20} />
+            </Button>
+            <Button
+              variant={activeTool === 'erase' ? 'default' : 'tool'}
+              size="tool"
+              onClick={() => setActiveTool('erase')}
+              className="aspect-square"
+              title="Erase"
+            >
+              <Eraser size={20} />
+            </Button>
+          </div>
         </div>
 
         {/* Brush Width Slider */}
