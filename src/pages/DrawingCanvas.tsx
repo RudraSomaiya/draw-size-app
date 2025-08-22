@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
+import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
 
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -70,11 +70,13 @@ const DrawingCanvas = () => {
     const imageScreenW = imgW * scale;
     const imageScreenH = imgH * scale;
 
-    // When image is larger than viewport, allow panning within bounds. If smaller, lock to center.
-    const minTX = imageScreenW > vw ? vw - imageScreenW : (vw - imageScreenW) / 2;
-    const maxTX = imageScreenW > vw ? 0 : (vw - imageScreenW) / 2;
-    const minTY = imageScreenH > vh ? vh - imageScreenH : (vh - imageScreenH) / 2;
-    const maxTY = imageScreenH > vh ? 0 : (vh - imageScreenH) / 2;
+    // Bounds. If image is smaller, allow a small slack so user can pan slightly instead of hard lock.
+    const eps = 0.5;
+    const slack = 24; // px slack when content smaller than viewport
+    const minTX = imageScreenW > vw ? vw - imageScreenW - eps : (vw - imageScreenW) / 2 - slack;
+    const maxTX = imageScreenW > vw ? 0 + eps : (vw - imageScreenW) / 2 + slack;
+    const minTY = imageScreenH > vh ? vh - imageScreenH - eps : (vh - imageScreenH) / 2 - slack;
+    const maxTY = imageScreenH > vh ? 0 + eps : (vh - imageScreenH) / 2 + slack;
 
     let translateX = Math.min(maxTX, Math.max(minTX, t.translateX));
     let translateY = Math.min(maxTY, Math.max(minTY, t.translateY));
@@ -84,13 +86,29 @@ const DrawingCanvas = () => {
 
   // Initialize canvas and load image
   useEffect(() => {
-    if (!canvasRef.current || !maskCanvasRef.current || !imageData || !containerRef.current) return;
+    if (!canvasRef.current || !imageData) return;
+    // Ensure offscreen mask canvas exists
+    if (!maskCanvasRef.current) {
+      maskCanvasRef.current = document.createElement('canvas');
+    }
 
-    // Calculate viewport size (fit container card)
+    // Calculate baseline viewport size (only used for initial canvas sizing before fit)
+    let viewportWidth = 800;
+    let viewportHeight = 600;
     const container = containerRef.current;
-    const rect = container.getBoundingClientRect();
-    const viewportWidth = Math.min(rect.width * 0.92, 800);
-    const viewportHeight = Math.min(rect.height * 0.72, 600);
+    const wrap = canvasWrapRef.current;
+    if (wrap) {
+      const r = wrap.getBoundingClientRect();
+      viewportWidth = Math.max(1, Math.round(r.width));
+      viewportHeight = Math.max(1, Math.round(r.height));
+    } else if (container) {
+      const r = container.getBoundingClientRect();
+      viewportWidth = Math.max(1, Math.round(r.width * 0.92));
+      viewportHeight = Math.max(1, Math.round(r.height * 0.72));
+    } else if (typeof window !== 'undefined') {
+      viewportWidth = Math.max(1, Math.round(window.innerWidth * 0.9));
+      viewportHeight = Math.max(1, Math.round(window.innerHeight * 0.6));
+    }
 
     setViewportSize({ width: viewportWidth, height: viewportHeight });
 
@@ -125,8 +143,8 @@ const DrawingCanvas = () => {
     const c = canvasRef.current;
     const wrap = canvasWrapRef.current;
     const rect = wrap?.getBoundingClientRect();
-    const cw = Math.floor(rect?.width ?? wrap?.clientWidth ?? c.clientWidth ?? c.width);
-    const ch = Math.floor(rect?.height ?? wrap?.clientHeight ?? c.clientHeight ?? c.height);
+    const cw = Math.round(rect?.width ?? wrap?.clientWidth ?? c.clientWidth ?? c.width);
+    const ch = Math.round(rect?.height ?? wrap?.clientHeight ?? c.clientHeight ?? c.height);
     if (!cw || !ch) return;
     if (c.width !== cw || c.height !== ch) {
       c.width = cw; c.height = ch;
@@ -136,7 +154,44 @@ const DrawingCanvas = () => {
     const ty = (ch - loadedImage.height * fitScale) / 2;
     // Set exact centered fit (no clamping during fit)
     setTransform({ scale: fitScale, translateX: tx, translateY: ty });
+    // Render immediately so user sees the image without waiting for state effect
+    requestAnimationFrame(() => renderCanvas());
   }, [loadedImage, clampTransform]);
+
+  // Wheel zoom: pivot around cursor and clamp result
+  const handleWheelZoomPan = useCallback<React.WheelEventHandler<HTMLCanvasElement>>((e) => {
+    if (!loadedImage || !canvasRef.current) return;
+    e.preventDefault();
+
+    const wrap = canvasWrapRef.current;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+
+    // Zoom delta
+    const zoomIntensity = 0.0015; // tune for trackpad/mouse
+    const delta = e.deltaY;
+    const scaleFactor = Math.exp(-delta * zoomIntensity);
+
+    const { scale, translateX, translateY } = transform;
+    const worldX = (px - translateX) / scale;
+    const worldY = (py - translateY) / scale;
+
+    let newScale = scale * scaleFactor;
+    // Soft limits; allow very small scale but keep reasonable max
+    newScale = Math.min(6, Math.max(0.1, newScale));
+
+    // Compute new translate so the cursor stays anchored
+    let newTX = px - worldX * newScale;
+    let newTY = py - worldY * newScale;
+
+    // Clamp to viewport
+    const rectWrap = wrap?.getBoundingClientRect();
+    const vw = Math.round(rectWrap?.width ?? rect.width);
+    const vh = Math.round(rectWrap?.height ?? rect.height);
+    const clamped = clampTransform({ scale: newScale, translateX: newTX, translateY: newTY }, loadedImage.width, loadedImage.height, vw, vh, true);
+    setTransform(clamped);
+  }, [transform, loadedImage, clampTransform]);
 
   // Ensure canvas backing store matches its displayed size and keep image centered on wrapper resize
   useEffect(() => {
@@ -200,6 +255,11 @@ const DrawingCanvas = () => {
       ctx.drawImage(overlay, 0, 0, loadedImage.width, loadedImage.height);
     }
 
+    // Debug outline to ensure visibility during troubleshooting
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 1 / transform.scale;
+    ctx.strokeRect(0, 0, loadedImage.width, loadedImage.height);
+
     ctx.restore();
   }, [loadedImage, transform]);
 
@@ -213,11 +273,11 @@ const DrawingCanvas = () => {
     if (!loadedImage || !canvasRef.current) return;
     const wrap = canvasWrapRef.current;
     const rect = wrap?.getBoundingClientRect();
-    const vw = Math.floor(rect?.width ?? wrap?.clientWidth ?? canvasRef.current.clientWidth ?? canvasRef.current.width);
-    const vh = Math.floor(rect?.height ?? wrap?.clientHeight ?? canvasRef.current.clientHeight ?? canvasRef.current.height);
+    const vw = Math.round(rect?.width ?? wrap?.clientWidth ?? canvasRef.current.clientWidth ?? canvasRef.current.width);
+    const vh = Math.round(rect?.height ?? wrap?.clientHeight ?? canvasRef.current.clientHeight ?? canvasRef.current.height);
     if (!vw || !vh) return;
     const clamped = clampTransform(transform, loadedImage.width, loadedImage.height, vw, vh, true);
-    const close = (a: number, b: number) => Math.abs(a - b) < 0.25; // avoid loops on tiny diffs
+    const close = (a: number, b: number) => Math.abs(a - b) < 0.01; // avoid loops on tiny diffs
     if (!close(clamped.scale, transform.scale) || !close(clamped.translateX, transform.translateX) || !close(clamped.translateY, transform.translateY)) {
       setTransform(clamped);
     }
@@ -442,25 +502,7 @@ const DrawingCanvas = () => {
   // Re-render when transform changes
   useEffect(() => {
     renderCanvas();
-  }, [renderCanvas, transform]);
-
-  // Wheel to zoom at cursor
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (!loadedImage || !canvasRef.current) return;
-    e.preventDefault();
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const delta = -e.deltaY; // up to zoom in
-    const factor = Math.exp(delta * 0.0015);
-    let newScale = transform.scale * factor;
-    newScale = Math.min(6, Math.max(0.75, newScale));
-    const imgPt = screenToImage(x, y);
-    const newTX = x - imgPt.x * newScale;
-    const newTY = y - imgPt.y * newScale;
-    const clamped = clampTransform({ scale: newScale, translateX: newTX, translateY: newTY }, loadedImage.width, loadedImage.height, viewportSize.width, viewportSize.height);
-    setTransform(clamped);
-  }, [loadedImage, transform.scale, screenToImage, viewportSize, clampTransform]);
+  }, [renderCanvas, transform, loadedImage]);
 
   // Start panning with Alt/Ctrl + drag
   const onPointerDownWrapper = useCallback((e: React.PointerEvent) => {
@@ -527,30 +569,10 @@ const DrawingCanvas = () => {
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
             onPointerLeave={handlePointerUp}
-            onWheel={handleWheel}
+            onWheel={handleWheelZoomPan}
             style={{ cursor: activeTool === 'draw' ? 'crosshair' : 'grab' }}
+            onContextMenu={(e) => e.preventDefault()}
           />
-          <canvas ref={maskCanvasRef} style={{ display: 'none' }} />
-        </div>
-
-        {/* Drawing Tools */}
-        <div className="grid grid-cols-5 gap-3 mb-6">
-          <Button
-            variant={activeTool === "draw" ? "default" : "tool"}
-            size="tool"
-            onClick={() => setActiveTool("draw")}
-            className="aspect-square"
-          >
-            <Pencil size={20} />
-          </Button>
-          <Button
-            variant={activeTool === "erase" ? "default" : "tool"}
-            size="tool"
-            onClick={() => setActiveTool("erase")}
-            className="aspect-square"
-          >
-            <Eraser size={20} />
-          </Button>
           <Button
             variant="tool"
             size="tool"
