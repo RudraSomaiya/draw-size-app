@@ -35,6 +35,7 @@ const DrawingCanvas = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasWrapRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const isPanningRef = useRef<boolean>(false);
   const lastPanRef = useRef<{ x: number; y: number } | null>(null);
@@ -61,10 +62,10 @@ const DrawingCanvas = () => {
   }, [transform]);
 
   // Clamp transform to keep image at least partially within viewport and scale within bounds
-  const clampTransform = useCallback((t: TransformMatrix, imgW: number, imgH: number, vw: number, vh: number): TransformMatrix => {
+  const clampTransform = useCallback((t: TransformMatrix, imgW: number, imgH: number, vw: number, vh: number, ignoreMinScale: boolean = false): TransformMatrix => {
     const minScale = 0.75;
     const maxScale = 6;
-    let scale = Math.min(maxScale, Math.max(minScale, t.scale));
+    let scale = Math.min(maxScale, ignoreMinScale ? t.scale : Math.max(minScale, t.scale));
 
     const imageScreenW = imgW * scale;
     const imageScreenH = imgH * scale;
@@ -101,26 +102,59 @@ const DrawingCanvas = () => {
       // Setup canvas sizes
       const canvas = canvasRef.current!;
       const maskCanvas = maskCanvasRef.current!;
+      // Temporarily set; we will sync to client size after layout
       canvas.width = viewportWidth;
       canvas.height = viewportHeight;
       maskCanvas.width = img.width;
       maskCanvas.height = img.height;
 
-      // Compute fit-to-screen transform (image space origin at 0,0)
-      const fitScale = Math.min(viewportWidth / img.width, viewportHeight / img.height);
-      const tx = (viewportWidth - img.width * fitScale) / 2;
-      const ty = (viewportHeight - img.height * fitScale) / 2;
-      const clamped = clampTransform({ scale: fitScale, translateX: tx, translateY: ty }, img.width, img.height, viewportWidth, viewportHeight);
-      setTransform(clamped);
-
-      // For reference rect in screen space (optional)
-      setImageRect({ x: tx, y: ty, width: img.width * fitScale, height: img.height * fitScale });
-
-      // Initial render
-      renderCanvas();
+      // Initial render and fit after layout settles (double RAF)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          fitToContainer();
+          renderCanvas();
+        });
+      });
     };
     img.src = imageData;
   }, [imageData, clampTransform]);
+
+  // Helper: fit image to the current canvas wrapper size
+  const fitToContainer = useCallback(() => {
+    if (!loadedImage || !canvasRef.current) return;
+    const c = canvasRef.current;
+    const wrap = canvasWrapRef.current;
+    const rect = wrap?.getBoundingClientRect();
+    const cw = Math.floor(rect?.width ?? wrap?.clientWidth ?? c.clientWidth ?? c.width);
+    const ch = Math.floor(rect?.height ?? wrap?.clientHeight ?? c.clientHeight ?? c.height);
+    if (!cw || !ch) return;
+    if (c.width !== cw || c.height !== ch) {
+      c.width = cw; c.height = ch;
+    }
+    const fitScale = Math.min(cw / loadedImage.width, ch / loadedImage.height);
+    const tx = (cw - loadedImage.width * fitScale) / 2;
+    const ty = (ch - loadedImage.height * fitScale) / 2;
+    // Set exact centered fit (no clamping during fit)
+    setTransform({ scale: fitScale, translateX: tx, translateY: ty });
+  }, [loadedImage, clampTransform]);
+
+  // Ensure canvas backing store matches its displayed size and keep image centered on wrapper resize
+  useEffect(() => {
+    const onWinResize = () => fitToContainer();
+    // Sync once on mount/updates
+    fitToContainer();
+    // Observe the wrapper for size changes
+    const ro = new ResizeObserver(() => fitToContainer());
+    if (canvasWrapRef.current) ro.observe(canvasWrapRef.current);
+    window.addEventListener('resize', onWinResize);
+    return () => {
+      window.removeEventListener('resize', onWinResize);
+      ro.disconnect();
+    };
+  }, [loadedImage, fitToContainer]);
+
+  // Recompute and center when image becomes available or viewportSize baseline changes
+  useEffect(() => { fitToContainer(); }, [loadedImage, viewportSize.width, viewportSize.height, fitToContainer]);
 
   // Render function
   const renderCanvas = useCallback(() => {
@@ -363,13 +397,13 @@ const DrawingCanvas = () => {
 
   const handleResetView = () => {
     if (!loadedImage || !canvasRef.current) return;
-    const vw = canvasRef.current.width;
-    const vh = canvasRef.current.height;
+    const vw = canvasRef.current.clientWidth || canvasRef.current.width;
+    const vh = canvasRef.current.clientHeight || canvasRef.current.height;
     const fitScale = Math.min(vw / loadedImage.width, vh / loadedImage.height);
     const tx = (vw - loadedImage.width * fitScale) / 2;
     const ty = (vh - loadedImage.height * fitScale) / 2;
-    const clamped = clampTransform({ scale: fitScale, translateX: tx, translateY: ty }, loadedImage.width, loadedImage.height, vw, vh);
-    setTransform(clamped);
+    // Set exact centered fit (no clamping during reset)
+    setTransform({ scale: fitScale, translateX: tx, translateY: ty });
   };
 
   const rebuildMask = useCallback((actions: DrawAction[]) => {
@@ -462,7 +496,7 @@ const DrawingCanvas = () => {
         </div>
 
         {/* Canvas Container */}
-        <div className="relative bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in mx-auto"
+        <div ref={canvasWrapRef} className="relative bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in mx-auto"
              style={{ width: viewportSize.width, height: viewportSize.height }}>
           <canvas
             ref={canvasRef}
