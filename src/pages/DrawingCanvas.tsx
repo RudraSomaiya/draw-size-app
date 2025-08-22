@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Pencil, Eraser, Undo, Trash2, ArrowRight, ArrowLeft, RotateCcw } from "lucide-react";
 
-// Action types for drawing history - each action can be replayed to rebuild the mask
+// Action types for drawing history - store in image-space so we can rebuild independent of view transform
 type DrawAction = {
   type: "draw" | "erase";
-  points: { x: number; y: number }[];
-  strokeWidth: number;
+  points: { x: number; y: number }[]; // image-space points
+  strokeWidth: number; // image-space width
 };
 
-// Transform matrix for zoom/pan operations
+// Transform matrix for zoom/pan operations (image space -> screen space)
 type TransformMatrix = {
   scale: number;
   translateX: number;
@@ -34,7 +35,10 @@ const DrawingCanvas = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const isPanningRef = useRef<boolean>(false);
+  const lastPanRef = useRef<{ x: number; y: number } | null>(null);
+
   // State
   const [activeTool, setActiveTool] = useState<"draw" | "erase">("draw");
   const [actionHistory, setActionHistory] = useState<DrawAction[]>([]);
@@ -45,7 +49,7 @@ const DrawingCanvas = () => {
   const [imageRect, setImageRect] = useState<ImageRect>({ x: 0, y: 0, width: 0, height: 0 });
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [loadedImage, setLoadedImage] = useState<HTMLImageElement | null>(null);
-  
+
   const imageData = location.state?.imageData;
 
   // Screen to image coordinate conversion using inverse transform
@@ -56,179 +60,288 @@ const DrawingCanvas = () => {
     return { x: imageX, y: imageY };
   }, [transform]);
 
+  // Clamp transform to keep image at least partially within viewport and scale within bounds
+  const clampTransform = useCallback((t: TransformMatrix, imgW: number, imgH: number, vw: number, vh: number): TransformMatrix => {
+    const minScale = 0.75;
+    const maxScale = 6;
+    let scale = Math.min(maxScale, Math.max(minScale, t.scale));
+
+    const imageScreenW = imgW * scale;
+    const imageScreenH = imgH * scale;
+
+    // When image is larger than viewport, allow panning within bounds. If smaller, lock to center.
+    const minTX = imageScreenW > vw ? vw - imageScreenW : (vw - imageScreenW) / 2;
+    const maxTX = imageScreenW > vw ? 0 : (vw - imageScreenW) / 2;
+    const minTY = imageScreenH > vh ? vh - imageScreenH : (vh - imageScreenH) / 2;
+    const maxTY = imageScreenH > vh ? 0 : (vh - imageScreenH) / 2;
+
+    let translateX = Math.min(maxTX, Math.max(minTX, t.translateX));
+    let translateY = Math.min(maxTY, Math.max(minTY, t.translateY));
+
+    return { scale, translateX, translateY };
+  }, []);
+
   // Initialize canvas and load image
   useEffect(() => {
     if (!canvasRef.current || !maskCanvasRef.current || !imageData || !containerRef.current) return;
 
-    // Calculate viewport size (92% width, max 72% height or 600px)
+    // Calculate viewport size (fit container card)
     const container = containerRef.current;
     const rect = container.getBoundingClientRect();
-    const viewportWidth = Math.min(rect.width * 0.92, 400);
+    const viewportWidth = Math.min(rect.width * 0.92, 800);
     const viewportHeight = Math.min(rect.height * 0.72, 600);
-    
+
     setViewportSize({ width: viewportWidth, height: viewportHeight });
 
     // Load image
     const img = new Image();
     img.onload = () => {
-      // Calculate image display rect (aspect-fit, centered)
-      const imgAspect = img.width / img.height;
-      const viewportAspect = viewportWidth / viewportHeight;
-      
-      let displayWidth, displayHeight, displayX, displayY;
-      
-      if (imgAspect > viewportAspect) {
-        // Image is wider - fit by width
-        displayWidth = viewportWidth;
-        displayHeight = viewportWidth / imgAspect;
-      } else {
-        // Image is taller - fit by height
-        displayHeight = viewportHeight;
-        displayWidth = viewportHeight * imgAspect;
-      }
-      
-      displayX = (viewportWidth - displayWidth) / 2;
-      displayY = (viewportHeight - displayHeight) / 2;
-      
-      setImageRect({ x: displayX, y: displayY, width: displayWidth, height: displayHeight });
       setLoadedImage(img);
-      
+
       // Setup canvas sizes
       const canvas = canvasRef.current!;
       const maskCanvas = maskCanvasRef.current!;
-      
       canvas.width = viewportWidth;
       canvas.height = viewportHeight;
       maskCanvas.width = img.width;
       maskCanvas.height = img.height;
-      
+
+      // Compute fit-to-screen transform (image space origin at 0,0)
+      const fitScale = Math.min(viewportWidth / img.width, viewportHeight / img.height);
+      const tx = (viewportWidth - img.width * fitScale) / 2;
+      const ty = (viewportHeight - img.height * fitScale) / 2;
+      const clamped = clampTransform({ scale: fitScale, translateX: tx, translateY: ty }, img.width, img.height, viewportWidth, viewportHeight);
+      setTransform(clamped);
+
+      // For reference rect in screen space (optional)
+      setImageRect({ x: tx, y: ty, width: img.width * fitScale, height: img.height * fitScale });
+
       // Initial render
       renderCanvas();
     };
     img.src = imageData;
-  }, [imageData]);
+  }, [imageData, clampTransform]);
 
   // Render function
   const renderCanvas = useCallback(() => {
     if (!canvasRef.current || !loadedImage) return;
-    
+
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d')!;
-    
+
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Apply transform
+
+    // Apply transform (image space -> screen)
     ctx.save();
     ctx.translate(transform.translateX, transform.translateY);
     ctx.scale(transform.scale, transform.scale);
-    
-    // Draw image
-    ctx.drawImage(loadedImage, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
-    
-    // Draw red overlay from mask
+
+    // Draw the image fully as the bottom layer covering its intrinsic bounds
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(loadedImage, 0, 0, loadedImage.width, loadedImage.height);
+
+    // Draw red overlay clipped by mask
     if (maskCanvasRef.current) {
       const maskCanvas = maskCanvasRef.current;
-      
-      // Create red overlay
-      ctx.fillStyle = 'rgba(239, 68, 68, 0.35)';
-      ctx.fillRect(imageRect.x, imageRect.y, imageRect.width, imageRect.height);
-      
-      // Use mask to clip overlay
-      ctx.globalCompositeOperation = 'destination-in';
-      ctx.drawImage(maskCanvas, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
+
+      // Build overlay on an offscreen canvas to avoid clipping the base image
+      const overlayCanvas = document.createElement('canvas');
+      overlayCanvas.width = loadedImage.width;
+      overlayCanvas.height = loadedImage.height;
+      const octx = overlayCanvas.getContext('2d')!;
+
+      // Fill red then clip by mask
+      octx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      octx.fillStyle = 'rgba(239, 68, 68, 0.35)';
+      octx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      octx.globalCompositeOperation = 'destination-in';
+      octx.drawImage(maskCanvas, 0, 0, overlayCanvas.width, overlayCanvas.height);
+      octx.globalCompositeOperation = 'source-over';
+
+      // Composite overlay over the already drawn image
       ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(overlayCanvas, 0, 0, loadedImage.width, loadedImage.height);
     }
-    
+
     ctx.restore();
-  }, [loadedImage, imageRect, transform]);
+  }, [loadedImage, transform]);
 
   // Draw on mask function
-  const drawOnMask = useCallback((points: { x: number; y: number }[], strokeWidth: number, isErase: boolean) => {
+  const drawOnMask = useCallback((points: { x: number; y: number }[], strokeWidthScreen: number, isErase: boolean) => {
     if (!maskCanvasRef.current || !loadedImage || points.length < 2) return;
 
     const maskCtx = maskCanvasRef.current.getContext('2d')!;
-    maskCtx.lineWidth = strokeWidth;
     maskCtx.lineCap = 'round';
     maskCtx.lineJoin = 'round';
-    
-    // Set composite operation: draw adds to mask, erase removes from mask
+
+    // Convert stroke width from screen to image space (uniform scale)
+    const strokeWidth = Math.max(1, strokeWidthScreen / transform.scale);
+    maskCtx.lineWidth = strokeWidth;
+
+    // Set composite operation: draw adds to mask (opaque white), erase clears from mask
     maskCtx.globalCompositeOperation = isErase ? 'destination-out' : 'source-over';
     maskCtx.strokeStyle = 'white';
 
     maskCtx.beginPath();
-    // Convert screen coordinates to image coordinates
-    const scale = imageRect.width / loadedImage.width;
-    const offsetX = imageRect.x / scale;
-    const offsetY = imageRect.y / scale;
-    
-    const firstPoint = screenToImage(points[0].x, points[0].y);
-    maskCtx.moveTo((firstPoint.x - offsetX) / scale, (firstPoint.y - offsetY) / scale);
-    
+    const p0 = screenToImage(points[0].x, points[0].y);
+    maskCtx.moveTo(p0.x, p0.y);
     for (let i = 1; i < points.length; i++) {
-      const point = screenToImage(points[i].x, points[i].y);
-      maskCtx.lineTo((point.x - offsetX) / scale, (point.y - offsetY) / scale);
+      const pi = screenToImage(points[i].x, points[i].y);
+      maskCtx.lineTo(pi.x, pi.y);
     }
-    
     maskCtx.stroke();
     renderCanvas();
-  }, [imageRect, loadedImage, screenToImage, renderCanvas]);
+  }, [loadedImage, screenToImage, renderCanvas, transform.scale]);
+
+  // Draw on mask using image-space coordinates directly
+  const drawOnMaskImageSpace = useCallback((points: { x: number; y: number }[], strokeWidthImage: number, isErase: boolean) => {
+    if (!maskCanvasRef.current || !loadedImage || points.length < 2) return;
+    const maskCtx = maskCanvasRef.current.getContext('2d')!;
+    maskCtx.lineCap = 'round';
+    maskCtx.lineJoin = 'round';
+    maskCtx.lineWidth = Math.max(1, strokeWidthImage);
+    maskCtx.globalCompositeOperation = isErase ? 'destination-out' : 'source-over';
+    maskCtx.strokeStyle = 'white';
+    maskCtx.beginPath();
+    maskCtx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      maskCtx.lineTo(points[i].x, points[i].y);
+    }
+    maskCtx.stroke();
+    renderCanvas();
+  }, [loadedImage, renderCanvas]);
 
   // Mouse/touch event handlers
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (!canvasRef.current || !loadedImage) return;
-    
+
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    
-    // Check if point is inside image bounds
+
+    // Track pointers for gestures
+    pointersRef.current.set(e.pointerId, { x, y });
+
+    const isModifierPan = e.altKey || e.ctrlKey || e.metaKey;
+    const isTouch = e.pointerType === 'touch';
+
+    if (isModifierPan) {
+      isPanningRef.current = true;
+      lastPanRef.current = { x, y };
+      e.preventDefault();
+      return;
+    }
+
+    if (isTouch && pointersRef.current.size >= 2) {
+      // Start pinch/pan gesture, do not draw
+      isPanningRef.current = true;
+      lastPanRef.current = { x, y };
+      e.preventDefault();
+      return;
+    }
+
+    // Otherwise, potential drawing if inside intrinsic image bounds
     const imgPoint = screenToImage(x, y);
-    if (imgPoint.x >= imageRect.x && imgPoint.x <= imageRect.x + imageRect.width &&
-        imgPoint.y >= imageRect.y && imgPoint.y <= imageRect.y + imageRect.height) {
+    if (imgPoint.x >= 0 && imgPoint.x <= loadedImage.width && imgPoint.y >= 0 && imgPoint.y <= loadedImage.height) {
       setIsDrawing(true);
       setCurrentPath([{ x, y }]);
       e.preventDefault();
     }
-  }, [screenToImage, imageRect, loadedImage]);
+  }, [loadedImage, screenToImage]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!isDrawing || !canvasRef.current) return;
-    
+    if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    
-    const newPath = [...currentPath, { x, y }];
-    setCurrentPath(newPath);
-    
-    // Draw stroke in real-time
-    if (newPath.length >= 2) {
-      const lastTwoPoints = newPath.slice(-2);
-      drawOnMask(lastTwoPoints, brushWidth[0], activeTool === 'erase');
+    if (pointersRef.current.has(e.pointerId)) {
+      pointersRef.current.set(e.pointerId, { x, y });
     }
-    
-    e.preventDefault();
-  }, [isDrawing, currentPath, brushWidth, activeTool, drawOnMask]);
 
-  const handlePointerUp = useCallback(() => {
+    // Gesture: pinch to zoom and two-finger pan
+    if (isPanningRef.current) {
+      const points = Array.from(pointersRef.current.values());
+      if (points.length >= 2 && loadedImage) {
+        const [p1, p2] = points;
+        const midX = (p1.x + p2.x) / 2;
+        const midY = (p1.y + p2.y) / 2;
+        const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        // Store previous state on first detection
+        const prev = (handlePointerMove as any)._prevGesture as undefined | { midX: number; midY: number; dist: number; scale: number; tx: number; ty: number };
+        if (!prev) {
+          (handlePointerMove as any)._prevGesture = { midX, midY, dist, scale: transform.scale, tx: transform.translateX, ty: transform.translateY };
+        } else {
+          const scaleFactor = dist / (prev.dist || dist || 1);
+          let newScale = transform.scale * scaleFactor;
+          // Zoom centered at midpoint
+          const imgPt = screenToImage(prev.midX, prev.midY);
+          newScale = Math.min(6, Math.max(0.75, newScale));
+          const newTX = prev.midX - imgPt.x * newScale;
+          const newTY = prev.midY - imgPt.y * newScale;
+          const clamped = clampTransform({ scale: newScale, translateX: newTX, translateY: newTY }, loadedImage.width, loadedImage.height, viewportSize.width, viewportSize.height);
+          setTransform(clamped);
+          (handlePointerMove as any)._prevGesture = { midX, midY, dist, scale: clamped.scale, tx: clamped.translateX, ty: clamped.translateY };
+        }
+        e.preventDefault();
+        return;
+      }
+
+      // Mouse/one-finger pan
+      if (lastPanRef.current && loadedImage) {
+        const dx = x - lastPanRef.current.x;
+        const dy = y - lastPanRef.current.y;
+        const next = clampTransform({ scale: transform.scale, translateX: transform.translateX + dx, translateY: transform.translateY + dy }, loadedImage.width, loadedImage.height, viewportSize.width, viewportSize.height);
+        setTransform(next);
+        lastPanRef.current = { x, y };
+        e.preventDefault();
+        return;
+      }
+    }
+
+    // Drawing
+    if (!isPanningRef.current && isDrawing) {
+      const newPath = [...currentPath, { x, y }];
+      setCurrentPath(newPath);
+      if (newPath.length >= 2) {
+        const lastTwoPoints = newPath.slice(-2);
+        drawOnMask(lastTwoPoints, brushWidth[0], activeTool === 'erase');
+      }
+      e.preventDefault();
+    }
+  }, [brushWidth, activeTool, currentPath, isDrawing, drawOnMask, transform, loadedImage, viewportSize, clampTransform]);
+
+  const handlePointerUp = useCallback((e?: React.PointerEvent) => {
+    if (e && pointersRef.current.has(e.pointerId)) {
+      pointersRef.current.delete(e.pointerId);
+    }
+
+    // End panning when no pointers or on mouse up
+    if (pointersRef.current.size === 0) {
+      isPanningRef.current = false;
+      lastPanRef.current = null;
+      (handlePointerMove as any)._prevGesture = undefined;
+    }
+
     if (!isDrawing || currentPath.length < 2) {
       setIsDrawing(false);
       setCurrentPath([]);
       return;
     }
 
-    // Save action to history
+    // Save action to history (convert to image-space coords and width)
+    const imagePoints = currentPath.map(p => screenToImage(p.x, p.y));
+    const imageStrokeWidth = Math.max(1, brushWidth[0] / transform.scale);
     const action: DrawAction = {
       type: activeTool,
-      points: currentPath,
-      strokeWidth: brushWidth[0]
+      points: imagePoints,
+      strokeWidth: imageStrokeWidth
     };
-    
+
     setActionHistory(prev => [...prev, action]);
     setIsDrawing(false);
     setCurrentPath([]);
-  }, [isDrawing, currentPath, activeTool, brushWidth]);
+  }, [isDrawing, currentPath, activeTool, brushWidth, handlePointerMove, screenToImage, transform.scale]);
 
   // Tool handlers
   const handleUndo = () => {
@@ -249,24 +362,59 @@ const DrawingCanvas = () => {
   };
 
   const handleResetView = () => {
-    setTransform({ scale: 1, translateX: 0, translateY: 0 });
+    if (!loadedImage || !canvasRef.current) return;
+    const vw = canvasRef.current.width;
+    const vh = canvasRef.current.height;
+    const fitScale = Math.min(vw / loadedImage.width, vh / loadedImage.height);
+    const tx = (vw - loadedImage.width * fitScale) / 2;
+    const ty = (vh - loadedImage.height * fitScale) / 2;
+    const clamped = clampTransform({ scale: fitScale, translateX: tx, translateY: ty }, loadedImage.width, loadedImage.height, vw, vh);
+    setTransform(clamped);
   };
 
   const rebuildMask = useCallback((actions: DrawAction[]) => {
     if (!maskCanvasRef.current || !loadedImage) return;
-    
+
     const ctx = maskCanvasRef.current.getContext('2d')!;
     ctx.clearRect(0, 0, loadedImage.width, loadedImage.height);
-    
+
     actions.forEach(action => {
-      drawOnMask(action.points, action.strokeWidth, action.type === 'erase');
+      drawOnMaskImageSpace(action.points, action.strokeWidth, action.type === 'erase');
     });
-  }, [drawOnMask, loadedImage]);
+  }, [drawOnMaskImageSpace, loadedImage]);
 
   // Re-render when transform changes
   useEffect(() => {
     renderCanvas();
   }, [renderCanvas, transform]);
+
+  // Wheel to zoom at cursor
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (!loadedImage || !canvasRef.current) return;
+    e.preventDefault();
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const delta = -e.deltaY; // up to zoom in
+    const factor = Math.exp(delta * 0.0015);
+    let newScale = transform.scale * factor;
+    newScale = Math.min(6, Math.max(0.75, newScale));
+    const imgPt = screenToImage(x, y);
+    const newTX = x - imgPt.x * newScale;
+    const newTY = y - imgPt.y * newScale;
+    const clamped = clampTransform({ scale: newScale, translateX: newTX, translateY: newTY }, loadedImage.width, loadedImage.height, viewportSize.width, viewportSize.height);
+    setTransform(clamped);
+  }, [loadedImage, transform.scale, screenToImage, viewportSize, clampTransform]);
+
+  // Start panning with Alt/Ctrl + drag
+  const onPointerDownWrapper = useCallback((e: React.PointerEvent) => {
+    handlePointerDown(e);
+    if (e.altKey || e.ctrlKey || e.metaKey) {
+      isPanningRef.current = true;
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      lastPanRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+  }, [handlePointerDown]);
 
   const handleNext = () => {
     navigate('/dimensions', { 
@@ -319,9 +467,12 @@ const DrawingCanvas = () => {
           <canvas
             ref={canvasRef}
             className="absolute inset-0 touch-none"
-            onPointerDown={handlePointerDown}
+            onPointerDown={onPointerDownWrapper}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onPointerLeave={handlePointerUp}
+            onWheel={handleWheel}
             style={{ cursor: activeTool === 'draw' ? 'crosshair' : 'grab' }}
           />
           <canvas ref={maskCanvasRef} style={{ display: 'none' }} />
