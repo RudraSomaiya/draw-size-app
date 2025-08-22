@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
 
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -154,7 +154,15 @@ const DrawingCanvas = () => {
   }, [loadedImage, fitToContainer]);
 
   // Recompute and center when image becomes available or viewportSize baseline changes
-  useEffect(() => { fitToContainer(); }, [loadedImage, viewportSize.width, viewportSize.height, fitToContainer]);
+  useEffect(() => { fitToContainer();  }, [loadedImage, viewportSize.width, viewportSize.height, fitToContainer]);
+
+  // Fit synchronously before paint when image becomes available
+  useLayoutEffect(() => {
+    if (!loadedImage) return;
+    fitToContainer();
+  }, [loadedImage, fitToContainer]);
+
+  // Rendering is triggered by input handlers and initial load fit
 
   // Render function
   const renderCanvas = useCallback(() => {
@@ -166,40 +174,39 @@ const DrawingCanvas = () => {
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Apply transform (image space -> screen)
+    // Apply transform
     ctx.save();
     ctx.translate(transform.translateX, transform.translateY);
     ctx.scale(transform.scale, transform.scale);
 
-    // Draw the image fully as the bottom layer covering its intrinsic bounds
-    ctx.globalCompositeOperation = 'source-over';
+    // Draw base image at origin in image space (no additional offsets)
     ctx.drawImage(loadedImage, 0, 0, loadedImage.width, loadedImage.height);
 
-    // Draw red overlay clipped by mask
+    // Build red translucent overlay on an offscreen canvas clipped by the mask
     if (maskCanvasRef.current) {
       const maskCanvas = maskCanvasRef.current;
-
-      // Build overlay on an offscreen canvas to avoid clipping the base image
-      const overlayCanvas = document.createElement('canvas');
-      overlayCanvas.width = loadedImage.width;
-      overlayCanvas.height = loadedImage.height;
-      const octx = overlayCanvas.getContext('2d')!;
-
-      // Fill red then clip by mask
-      octx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      const overlay = document.createElement('canvas');
+      overlay.width = loadedImage.width;
+      overlay.height = loadedImage.height;
+      const octx = overlay.getContext('2d')!;
+      // Fill red
       octx.fillStyle = 'rgba(239, 68, 68, 0.35)';
-      octx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      octx.fillRect(0, 0, overlay.width, overlay.height);
+      // Clip overlay by mask
       octx.globalCompositeOperation = 'destination-in';
-      octx.drawImage(maskCanvas, 0, 0, overlayCanvas.width, overlayCanvas.height);
+      octx.drawImage(maskCanvas, 0, 0, overlay.width, overlay.height);
       octx.globalCompositeOperation = 'source-over';
-
-      // Composite overlay over the already drawn image
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.drawImage(overlayCanvas, 0, 0, loadedImage.width, loadedImage.height);
+      // Composite overlay over the base image
+      ctx.drawImage(overlay, 0, 0, loadedImage.width, loadedImage.height);
     }
 
     ctx.restore();
   }, [loadedImage, transform]);
+
+  // Ensure canvas re-renders on every transform or image change
+  useEffect(() => {
+    renderCanvas();
+  }, [renderCanvas, transform, loadedImage]);
 
   // Draw on mask function
   const drawOnMask = useCallback((points: { x: number; y: number }[], strokeWidthScreen: number, isErase: boolean) => {
@@ -496,8 +503,7 @@ const DrawingCanvas = () => {
         </div>
 
         {/* Canvas Container */}
-        <div ref={canvasWrapRef} className="relative bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in mx-auto"
-             style={{ width: viewportSize.width, height: viewportSize.height }}>
+        <div ref={canvasWrapRef} className="relative w-full min-h-[60vh] bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in mx-auto">
           <canvas
             ref={canvasRef}
             className="absolute inset-0 touch-none"
