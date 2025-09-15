@@ -50,6 +50,8 @@ const DrawingCanvas = () => {
   const [imageRect, setImageRect] = useState<ImageRect>({ x: 0, y: 0, width: 0, height: 0 });
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [loadedImage, setLoadedImage] = useState<HTMLImageElement | null>(null);
+  const [cursorPosition, setCursorPosition] = useState<{ x: number; y: number } | null>(null);
+  const [showCursorPreview, setShowCursorPreview] = useState(false);
 
   const imageData = location.state?.imageData;
 
@@ -371,6 +373,10 @@ const DrawingCanvas = () => {
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    
+    // Update cursor position for preview
+    setCursorPosition({ x: e.clientX, y: e.clientY });
+    
     if (pointersRef.current.has(e.pointerId)) {
       pointersRef.current.set(e.pointerId, { x, y });
     }
@@ -389,15 +395,21 @@ const DrawingCanvas = () => {
           (handlePointerMove as any)._prevGesture = { midX, midY, dist, scale: transform.scale, tx: transform.translateX, ty: transform.translateY };
         } else {
           const scaleFactor = dist / (prev.dist || dist || 1);
-          let newScale = transform.scale * scaleFactor;
+          let newScale = prev.scale * scaleFactor;
           // Zoom centered at midpoint
           const imgPt = screenToImage(prev.midX, prev.midY);
           newScale = Math.min(6, Math.max(0.75, newScale));
           const newTX = prev.midX - imgPt.x * newScale;
           const newTY = prev.midY - imgPt.y * newScale;
-          const clamped = clampTransform({ scale: newScale, translateX: newTX, translateY: newTY }, loadedImage.width, loadedImage.height, viewportSize.width, viewportSize.height);
+          
+          const wrap = canvasWrapRef.current;
+          const rect = wrap?.getBoundingClientRect();
+          const vw = Math.round(rect?.width ?? viewportSize.width);
+          const vh = Math.round(rect?.height ?? viewportSize.height);
+          
+          const clamped = clampTransform({ scale: newScale, translateX: newTX, translateY: newTY }, loadedImage.width, loadedImage.height, vw, vh);
           setTransform(clamped);
-          (handlePointerMove as any)._prevGesture = { midX, midY, dist, scale: clamped.scale, tx: clamped.translateX, ty: clamped.translateY };
+          (handlePointerMove as any)._prevGesture = { midX, midY, dist: dist, scale: clamped.scale, tx: clamped.translateX, ty: clamped.translateY };
         }
         e.preventDefault();
         return;
@@ -407,7 +419,17 @@ const DrawingCanvas = () => {
       if (lastPanRef.current && loadedImage) {
         const dx = x - lastPanRef.current.x;
         const dy = y - lastPanRef.current.y;
-        const next = clampTransform({ scale: transform.scale, translateX: transform.translateX + dx, translateY: transform.translateY + dy }, loadedImage.width, loadedImage.height, viewportSize.width, viewportSize.height);
+        
+        const wrap = canvasWrapRef.current;
+        const rect = wrap?.getBoundingClientRect();
+        const vw = Math.round(rect?.width ?? viewportSize.width);
+        const vh = Math.round(rect?.height ?? viewportSize.height);
+        
+        const next = clampTransform({ 
+          scale: transform.scale, 
+          translateX: transform.translateX + dx, 
+          translateY: transform.translateY + dy 
+        }, loadedImage.width, loadedImage.height, vw, vh);
         setTransform(next);
         lastPanRef.current = { x, y };
         e.preventDefault();
@@ -541,10 +563,9 @@ const DrawingCanvas = () => {
   return (
     <div 
       ref={containerRef}
-      className="min-h-screen bg-gradient-surface p-4"
+      className="min-h-screen bg-gradient-surface p-4 overflow-auto"
       style={{ 
-        userSelect: 'none', 
-        touchAction: 'none',
+        userSelect: 'none',
         WebkitUserSelect: 'none',
         MozUserSelect: 'none'
       }}
@@ -560,18 +581,26 @@ const DrawingCanvas = () => {
         </div>
 
         {/* Canvas Container */}
-        <div ref={canvasWrapRef} className="relative w-full min-h-[60vh] bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in mx-auto">
+        <div 
+          ref={canvasWrapRef} 
+          className="relative w-full min-h-[60vh] bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in mx-auto"
+          onPointerEnter={() => setShowCursorPreview(true)}
+          onPointerLeave={() => setShowCursorPreview(false)}
+        >
           {/* The drawing canvas (z-0 so overlays are clickable) */}
           <canvas
             ref={canvasRef}
-            className="absolute inset-0 z-0 touch-none"
+            className="absolute inset-0 z-0"
             onPointerDown={onPointerDownWrapper}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
             onPointerLeave={handlePointerUp}
             onWheel={handleWheelZoomPan}
-            style={{ cursor: activeTool === 'draw' ? 'crosshair' : 'grab' }}
+            style={{ 
+              cursor: activeTool === 'draw' ? 'none' : 'grab',
+              touchAction: 'none'
+            }}
             onContextMenu={(e) => e.preventDefault()}
           />
 
@@ -631,7 +660,11 @@ const DrawingCanvas = () => {
         </div>
 
         {/* Brush Width Slider */}
-        <div className="mb-6 bg-surface rounded-xl p-4 shadow-card">
+        <div 
+          className="mb-6 bg-surface rounded-xl p-4 shadow-card"
+          onPointerEnter={() => setShowCursorPreview(true)}
+          onPointerLeave={() => setShowCursorPreview(false)}
+        >
           <label className="block text-sm font-medium text-foreground mb-3">
             Selection Size: {brushWidth[0]}px
           </label>
@@ -651,6 +684,23 @@ const DrawingCanvas = () => {
           Continue to Dimensions
         </Button>
       </div>
+
+      {/* Cursor Preview */}
+      {showCursorPreview && cursorPosition && activeTool === 'draw' && (
+        <div
+          className="fixed pointer-events-none z-50 border-2 border-primary rounded-full"
+          style={{
+            left: cursorPosition.x - brushWidth[0] / 2,
+            top: cursorPosition.y - brushWidth[0] / 2,
+            width: brushWidth[0],
+            height: brushWidth[0],
+            opacity: 0.6,
+            transform: 'translate(-50%, -50%)',
+            marginLeft: '50%',
+            marginTop: '50%'
+          }}
+        />
+      )}
     </div>
   );
 };
