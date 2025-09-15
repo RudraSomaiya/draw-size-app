@@ -50,8 +50,7 @@ const DrawingCanvas = () => {
   const [imageRect, setImageRect] = useState<ImageRect>({ x: 0, y: 0, width: 0, height: 0 });
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [loadedImage, setLoadedImage] = useState<HTMLImageElement | null>(null);
-  const [cursorPosition, setCursorPosition] = useState<{ x: number; y: number } | null>(null);
-  const [showCursorPreview, setShowCursorPreview] = useState(false);
+  const [showBrushPreview, setShowBrushPreview] = useState(false);
 
   const imageData = location.state?.imageData;
 
@@ -374,9 +373,6 @@ const DrawingCanvas = () => {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    // Update cursor position for preview
-    setCursorPosition({ x: e.clientX, y: e.clientY });
-    
     if (pointersRef.current.has(e.pointerId)) {
       pointersRef.current.set(e.pointerId, { x, y });
     }
@@ -584,8 +580,6 @@ const DrawingCanvas = () => {
         <div 
           ref={canvasWrapRef} 
           className="relative w-full min-h-[60vh] bg-surface rounded-xl shadow-card overflow-hidden mb-6 animate-bounce-in mx-auto"
-          onPointerEnter={() => setShowCursorPreview(true)}
-          onPointerLeave={() => setShowCursorPreview(false)}
         >
           {/* The drawing canvas (z-0 so overlays are clickable) */}
           <canvas
@@ -598,7 +592,7 @@ const DrawingCanvas = () => {
             onPointerLeave={handlePointerUp}
             onWheel={handleWheelZoomPan}
             style={{ 
-              cursor: activeTool === 'draw' ? 'none' : 'grab',
+              cursor: activeTool === 'draw' ? 'crosshair' : 'grab',
               touchAction: 'none'
             }}
             onContextMenu={(e) => e.preventDefault()}
@@ -660,22 +654,46 @@ const DrawingCanvas = () => {
         </div>
 
         {/* Brush Width Slider */}
-        <div 
-          className="mb-6 bg-surface rounded-xl p-4 shadow-card"
-          onPointerEnter={() => setShowCursorPreview(true)}
-          onPointerLeave={() => setShowCursorPreview(false)}
-        >
+        <div className="mb-6 bg-surface rounded-xl p-4 shadow-card">
           <label className="block text-sm font-medium text-foreground mb-3">
             Selection Size: {brushWidth[0]}px
           </label>
-          <Slider
-            value={brushWidth}
-            onValueChange={setBrushWidth}
-            max={50}
-            min={5}
-            step={1}
-            className="w-full"
-          />
+          
+          {/* Brush Size Preview */}
+          <div className="flex justify-center mb-4">
+            <div className="relative h-16 flex items-center justify-center">
+              <div
+                className={`border-2 border-primary rounded-full bg-primary/20 transition-all duration-200 ${
+                  showBrushPreview ? 'opacity-100 scale-100' : 'opacity-0 scale-75'
+                }`}
+                style={{
+                  width: Math.min(brushWidth[0], 60),
+                  height: Math.min(brushWidth[0], 60),
+                }}
+              />
+            </div>
+          </div>
+          
+          <div
+            onPointerEnter={() => setShowBrushPreview(true)}
+            onPointerLeave={() => setShowBrushPreview(false)}
+            onTouchStart={() => setShowBrushPreview(true)}
+            onTouchEnd={() => setShowBrushPreview(false)}
+          >
+            <Slider
+              value={brushWidth}
+              onValueChange={(value) => {
+                setBrushWidth(value);
+                setShowBrushPreview(true);
+              }}
+              onPointerUp={() => setShowBrushPreview(false)}
+              onTouchEnd={() => setShowBrushPreview(false)}
+              max={50}
+              min={5}
+              step={1}
+              className="w-full"
+            />
+          </div>
         </div>
 
         {/* Next Button */}
@@ -684,23 +702,6 @@ const DrawingCanvas = () => {
           Continue to Dimensions
         </Button>
       </div>
-
-      {/* Cursor Preview */}
-      {showCursorPreview && cursorPosition && activeTool === 'draw' && (
-        <div
-          className="fixed pointer-events-none z-50 border-2 border-primary rounded-full"
-          style={{
-            left: cursorPosition.x - brushWidth[0] / 2,
-            top: cursorPosition.y - brushWidth[0] / 2,
-            width: brushWidth[0],
-            height: brushWidth[0],
-            opacity: 0.6,
-            transform: 'translate(-50%, -50%)',
-            marginLeft: '50%',
-            marginTop: '50%'
-          }}
-        />
-      )}
     </div>
   );
 };
