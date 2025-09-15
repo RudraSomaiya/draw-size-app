@@ -64,9 +64,11 @@ const DrawingCanvas = () => {
 
   // Clamp transform to keep image at least partially within viewport and scale within bounds
   const clampTransform = useCallback((t: TransformMatrix, imgW: number, imgH: number, vw: number, vh: number, ignoreMinScale: boolean = false): TransformMatrix => {
-    const minScale = 0.75;
+    // Calculate the fit scale to determine the actual minimum scale needed to show full image
+    const fitScale = Math.min(vw / imgW, vh / imgH);
+    const minScale = ignoreMinScale ? 0.1 : fitScale; // Use fit scale as minimum, not arbitrary 0.75
     const maxScale = 6;
-    let scale = Math.min(maxScale, ignoreMinScale ? t.scale : Math.max(minScale, t.scale));
+    let scale = Math.min(maxScale, Math.max(minScale, t.scale));
 
     const imageScreenW = imgW * scale;
     const imageScreenH = imgH * scale;
