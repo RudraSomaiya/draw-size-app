@@ -39,6 +39,7 @@ const DrawingCanvas = () => {
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const isPanningRef = useRef<boolean>(false);
   const lastPanRef = useRef<{ x: number; y: number } | null>(null);
+  const lastGestureRef = useRef<{ midX: number; midY: number; dist: number; scale: number; tx: number; ty: number } | null>(null);
 
   // State
   const [activeTool, setActiveTool] = useState<"draw" | "erase">("draw");
@@ -383,37 +384,61 @@ const DrawingCanvas = () => {
     if (isPanningRef.current) {
       const points = Array.from(pointersRef.current.values());
       if (points.length >= 2 && loadedImage) {
+        // Two-finger gesture (pinch/zoom + pan)
         const [p1, p2] = points;
         const midX = (p1.x + p2.x) / 2;
         const midY = (p1.y + p2.y) / 2;
         const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-        // Store previous state on first detection
-        const prev = (handlePointerMove as any)._prevGesture as undefined | { midX: number; midY: number; dist: number; scale: number; tx: number; ty: number };
+        
+        const prev = lastGestureRef.current;
         if (!prev) {
-          (handlePointerMove as any)._prevGesture = { midX, midY, dist, scale: transform.scale, tx: transform.translateX, ty: transform.translateY };
+          // Initialize gesture state
+          lastGestureRef.current = { 
+            midX, 
+            midY, 
+            dist, 
+            scale: transform.scale, 
+            tx: transform.translateX, 
+            ty: transform.translateY 
+          };
         } else {
-          const scaleFactor = dist / (prev.dist || dist || 1);
+          // Calculate scale change
+          const scaleFactor = dist / Math.max(prev.dist, 1);
           let newScale = prev.scale * scaleFactor;
-          // Zoom centered at midpoint
+          newScale = Math.min(6, Math.max(0.1, newScale));
+          
+          // Calculate translation for zoom centering and pan
+          const panDX = midX - prev.midX;
+          const panDY = midY - prev.midY;
+          
+          // Zoom around the gesture center, then apply pan
           const imgPt = screenToImage(prev.midX, prev.midY);
-          newScale = Math.min(6, Math.max(0.75, newScale));
-          const newTX = prev.midX - imgPt.x * newScale;
-          const newTY = prev.midY - imgPt.y * newScale;
+          let newTX = prev.midX - imgPt.x * newScale + panDX;
+          let newTY = prev.midY - imgPt.y * newScale + panDY;
           
           const wrap = canvasWrapRef.current;
           const rect = wrap?.getBoundingClientRect();
           const vw = Math.round(rect?.width ?? viewportSize.width);
           const vh = Math.round(rect?.height ?? viewportSize.height);
           
-          const clamped = clampTransform({ scale: newScale, translateX: newTX, translateY: newTY }, loadedImage.width, loadedImage.height, vw, vh);
+          const clamped = clampTransform({ scale: newScale, translateX: newTX, translateY: newTY }, loadedImage.width, loadedImage.height, vw, vh, true);
           setTransform(clamped);
-          (handlePointerMove as any)._prevGesture = { midX, midY, dist: dist, scale: clamped.scale, tx: clamped.translateX, ty: clamped.translateY };
+          
+          // Update gesture state with current values (not clamped ones for smoother gestures)
+          lastGestureRef.current = { 
+            midX, 
+            midY, 
+            dist, 
+            scale: newScale, 
+            tx: newTX, 
+            ty: newTY 
+          };
         }
         e.preventDefault();
         return;
       }
 
-      // Mouse/one-finger pan
+      // Single finger pan (mouse or single touch with modifier)
       if (lastPanRef.current && loadedImage) {
         const dx = x - lastPanRef.current.x;
         const dy = y - lastPanRef.current.y;
@@ -423,29 +448,33 @@ const DrawingCanvas = () => {
         const vw = Math.round(rect?.width ?? viewportSize.width);
         const vh = Math.round(rect?.height ?? viewportSize.height);
         
-        const next = clampTransform({ 
-          scale: transform.scale, 
-          translateX: transform.translateX + dx, 
-          translateY: transform.translateY + dy 
-        }, loadedImage.width, loadedImage.height, vw, vh);
-        setTransform(next);
+        const newTransform = {
+          ...transform,
+          translateX: transform.translateX + dx,
+          translateY: transform.translateY + dy
+        };
+        
+        const clamped = clampTransform(newTransform, loadedImage.width, loadedImage.height, vw, vh, true);
+        setTransform(clamped);
         lastPanRef.current = { x, y };
         e.preventDefault();
         return;
       }
     }
 
-    // Drawing
-    if (!isPanningRef.current && isDrawing) {
-      const newPath = [...currentPath, { x, y }];
-      setCurrentPath(newPath);
-      if (newPath.length >= 2) {
-        const lastTwoPoints = newPath.slice(-2);
-        drawOnMask(lastTwoPoints, brushWidth[0], activeTool === 'erase');
+    // Drawing mode
+    if (!isPanningRef.current && isDrawing && loadedImage) {
+      const imgPoint = screenToImage(x, y);
+      if (imgPoint.x >= 0 && imgPoint.x <= loadedImage.width && imgPoint.y >= 0 && imgPoint.y <= loadedImage.height) {
+        const newPath = [...currentPath, { x, y }];
+        setCurrentPath(newPath);
+        if (newPath.length >= 2) {
+          drawOnMask(newPath.slice(-2), brushWidth[0], activeTool === "erase");
+        }
+        e.preventDefault();
       }
-      e.preventDefault();
     }
-  }, [brushWidth, activeTool, currentPath, isDrawing, drawOnMask, transform, loadedImage, viewportSize, clampTransform]);
+  }, [transform, isDrawing, currentPath, brushWidth, activeTool, loadedImage, screenToImage, drawOnMask, viewportSize, clampTransform]);
 
   const handlePointerUp = useCallback((e?: React.PointerEvent) => {
     if (e && pointersRef.current.has(e.pointerId)) {
@@ -456,7 +485,7 @@ const DrawingCanvas = () => {
     if (pointersRef.current.size === 0) {
       isPanningRef.current = false;
       lastPanRef.current = null;
-      (handlePointerMove as any)._prevGesture = undefined;
+      lastGestureRef.current = null;
     }
 
     if (!isDrawing || currentPath.length < 2) {
