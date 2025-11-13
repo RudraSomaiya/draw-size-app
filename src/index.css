@@ -122,5 +122,7 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground;
+    min-width: 1024px; /* Ensure minimum laptop width */
+    overflow-x: auto; /* Allow horizontal scroll if needed */
   }
 }

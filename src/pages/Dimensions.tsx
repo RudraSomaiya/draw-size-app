@@ -64,53 +64,54 @@ const Dimensions = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-surface p-4">
-      <div className="max-w-md mx-auto pt-4">
+    <div className="min-h-screen bg-gradient-surface p-8">
+      <div className="max-w-6xl mx-auto pt-8">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6 animate-fade-in">
+        <div className="flex items-center justify-between mb-12 animate-fade-in">
           <Button variant="ghost" size="icon" onClick={handleBack}>
-            <ArrowLeft size={20} />
+            <ArrowLeft size={24} />
           </Button>
-          <h1 className="text-xl font-bold text-foreground">
+          <h1 className="text-3xl font-bold text-foreground">
             Enter Dimensions
           </h1>
-          <div className="w-10" />
+          <div className="w-12" />
         </div>
 
-        {/* Preview Image with Dimension Arrows */}
-        <Card className="p-6 mb-6 shadow-card animate-bounce-in">
-          <div className="relative">
-            {/* Width Arrow - Horizontal */}
-            <div className="absolute -top-8 left-0 right-0 flex items-center justify-center">
-              <div className="flex items-center text-text-soft">
-                <ArrowLeftRight size={16} />
-                <span className="mx-2 text-xs font-medium">Width</span>
-                <ArrowLeftRight size={16} />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+          {/* Preview Image with Dimension Arrows */}
+          <Card className="p-8 shadow-card animate-bounce-in">
+            <div className="relative">
+              {/* Width Arrow - Horizontal */}
+              <div className="absolute -top-10 left-0 right-0 flex items-center justify-center">
+                <div className="flex items-center text-text-soft">
+                  <ArrowLeftRight size={20} />
+                  <span className="mx-3 text-sm font-medium">Width</span>
+                  <ArrowLeftRight size={20} />
+                </div>
+              </div>
+              
+              {/* Height Arrow - Vertical */}
+              <div className="absolute -left-10 top-0 bottom-0 flex items-center justify-center">
+                <div className="flex flex-col items-center text-text-soft transform -rotate-90">
+                  <ArrowUpDown size={20} />
+                  <span className="mx-3 text-sm font-medium">Height</span>
+                  <ArrowUpDown size={20} />
+                </div>
+              </div>
+
+              {/* Image */}
+              <div className="relative rounded-xl overflow-hidden bg-surface-soft">
+                <img 
+                  src={annotatedImage} 
+                  alt="Annotated" 
+                  className="w-full h-80 object-contain"
+                />
               </div>
             </div>
-            
-            {/* Height Arrow - Vertical */}
-            <div className="absolute -left-8 top-0 bottom-0 flex items-center justify-center">
-              <div className="flex flex-col items-center text-text-soft transform -rotate-90">
-                <ArrowUpDown size={16} />
-                <span className="mx-2 text-xs font-medium">Height</span>
-                <ArrowUpDown size={16} />
-              </div>
-            </div>
+          </Card>
 
-            {/* Image */}
-            <div className="relative rounded-lg overflow-hidden bg-surface-soft">
-              <img 
-                src={annotatedImage} 
-                alt="Annotated" 
-                className="w-full h-48 object-contain"
-              />
-            </div>
-          </div>
-        </Card>
-
-        {/* Dimensions Form */}
-        <Card className="p-6 shadow-card animate-fade-in">
+          {/* Dimensions Form */}
+          <Card className="p-8 shadow-card animate-fade-in">
           <div className="flex items-center gap-3 mb-6">
             <div className="p-3 bg-primary-light rounded-xl">
               <Ruler className="text-primary" size={24} />
@@ -177,13 +178,14 @@ const Dimensions = () => {
               )}
             </Button>
           </form>
-        </Card>
+          </Card>
+        </div>
 
         {/* Summary */}
         {height && width && (
-          <Card className="p-4 mt-4 bg-primary-light border-primary/20 animate-fade-in">
+          <Card className="p-6 mt-8 bg-primary-light border-primary/20 animate-fade-in">
             <div className="text-center">
-              <p className="text-sm text-primary font-medium">
+              <p className="text-lg text-primary font-medium">
                 Total Area: {(parseFloat(height) * parseFloat(width)).toFixed(2)} m²
               </p>
             </div>

@@ -58,21 +58,21 @@ const ImageUpload = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-surface p-4">
-      <div className="max-w-md mx-auto pt-8">
-        <div className="text-center mb-8 animate-fade-in">
-          <h1 className="text-2xl font-bold text-foreground mb-2">
+    <div className="min-h-screen bg-gradient-surface p-8">
+      <div className="max-w-4xl mx-auto pt-12">
+        <div className="text-center mb-12 animate-fade-in">
+          <h1 className="text-4xl font-bold text-foreground mb-4">
             Upload Image
           </h1>
-          <p className="text-text-soft">
+          <p className="text-lg text-text-soft">
             Select or drag and drop an image to get started
           </p>
         </div>
 
-        <Card className="p-6 shadow-card animate-bounce-in">
+        <Card className="p-12 shadow-card animate-bounce-in">
           {!selectedImage ? (
             <div
-              className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 cursor-pointer ${
+              className={`border-2 border-dashed rounded-xl p-12 text-center transition-all duration-200 cursor-pointer ${
                 isDragging 
                   ? 'border-primary bg-primary-light' 
                   : 'border-border hover:border-primary hover:bg-accent'
@@ -83,10 +83,10 @@ const ImageUpload = () => {
               onClick={handleUploadClick}
             >
               <div className="flex flex-col items-center gap-4">
-                <div className={`p-4 rounded-full transition-colors duration-200 ${
+                <div className={`p-6 rounded-full transition-colors duration-200 ${
                   isDragging ? 'bg-primary text-primary-foreground' : 'bg-accent text-accent-foreground'
                 }`}>
-                  <Upload size={32} />
+                  <Upload size={48} />
                 </div>
                 <div>
                   <p className="font-medium text-foreground mb-1">
@@ -108,23 +108,25 @@ const ImageUpload = () => {
                 <img 
                   src={selectedImage} 
                   alt="Selected" 
-                  className="w-full h-64 object-cover"
+                  className="w-full h-96 object-cover"
                 />
               </div>
-              <div className="flex gap-3">
+              <div className="flex gap-6 justify-center">
                 <Button 
                   variant="outline" 
                   onClick={handleUploadClick}
-                  className="flex-1"
+                  className="px-8 py-3 text-lg"
+                  size="lg"
                 >
-                  <Upload size={16} />
+                  <Upload size={20} />
                   Change Image
                 </Button>
                 <Button 
                   onClick={handleNext}
-                  className="flex-1"
+                  className="px-8 py-3 text-lg"
+                  size="lg"
                 >
-                  <ArrowRight size={16} />
+                  <ArrowRight size={20} />
                   Next
                 </Button>
               </div>
