@@ -53,6 +53,7 @@ const DrawingCanvas = () => {
   const [showBrushPreview, setShowBrushPreview] = useState(false);
 
   const imageData = location.state?.imageData;
+  const restoredActionHistory = location.state?.actionHistory || [];
 
   // Screen to image coordinate conversion using inverse transform
   const screenToImage = useCallback((screenX: number, screenY: number) => {
@@ -126,6 +127,13 @@ const DrawingCanvas = () => {
     };
     img.src = imageData;
   }, [imageData]);
+
+  // Restore action history when component loads (will be completed after rebuildMask is defined)
+  useEffect(() => {
+    if (restoredActionHistory.length > 0) {
+      setActionHistory(restoredActionHistory);
+    }
+  }, [restoredActionHistory]);
 
   // Render canvas with image and mask overlay
   const renderCanvas = useCallback(() => {
@@ -321,6 +329,13 @@ const DrawingCanvas = () => {
     });
   }, [drawOnMaskImageSpace, loadedImage]);
 
+  // Rebuild mask when action history is restored
+  useEffect(() => {
+    if (restoredActionHistory.length > 0 && loadedImage) {
+      rebuildMask(restoredActionHistory);
+    }
+  }, [restoredActionHistory, loadedImage, rebuildMask]);
+
   useEffect(() => {
     renderCanvas();
   }, [renderCanvas, transform, loadedImage]);
@@ -375,11 +390,37 @@ const DrawingCanvas = () => {
     handlePointerDown(e);
   }, [handlePointerDown]);
 
+  // Calculate mask coverage percentage
+  const calculateMaskCoverage = useCallback(() => {
+    if (!maskCanvasRef.current || !loadedImage) return 0;
+    
+    const maskCanvas = maskCanvasRef.current;
+    const ctx = maskCanvas.getContext('2d')!;
+    const imageData = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+    const pixels = imageData.data;
+    
+    let coveredPixels = 0;
+    const totalPixels = maskCanvas.width * maskCanvas.height;
+    
+    // Count non-transparent pixels (drawn areas)
+    for (let i = 3; i < pixels.length; i += 4) { // Check alpha channel
+      if (pixels[i] > 0) { // If alpha > 0, pixel is covered
+        coveredPixels++;
+      }
+    }
+    
+    return (coveredPixels / totalPixels) * 100;
+  }, [loadedImage]);
+
   const handleNext = () => {
+    const coveragePercentage = calculateMaskCoverage();
+    
     navigate('/dimensions', { 
       state: { 
         originalImage: imageData,
-        annotatedImage: imageData
+        annotatedImage: imageData,
+        maskCoverage: coveragePercentage,
+        actionHistory: actionHistory
       } 
     });
   };

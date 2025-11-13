@@ -14,7 +14,7 @@ const Dimensions = () => {
   const [width, setWidth] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  const { originalImage, annotatedImage } = location.state || {};
+  const { originalImage, annotatedImage, maskCoverage = 0, actionHistory = [] } = location.state || {};
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,13 +41,20 @@ const Dimensions = () => {
     console.log({
       height: parseFloat(height),
       width: parseFloat(width),
+      totalArea: parseFloat(height) * parseFloat(width),
+      drawingCoverage: maskCoverage,
       originalImage,
       annotatedImage
     });
   };
 
   const handleBack = () => {
-    navigate('/drawing', { state: { imageData: originalImage } });
+    navigate('/drawing', { 
+      state: { 
+        imageData: originalImage,
+        actionHistory: actionHistory
+      } 
+    });
   };
 
   if (!originalImage || !annotatedImage) {
@@ -184,9 +191,15 @@ const Dimensions = () => {
         {/* Summary */}
         {height && width && (
           <Card className="p-6 mt-8 bg-primary-light border-primary/20 animate-fade-in">
-            <div className="text-center">
+            <div className="text-center space-y-2">
               <p className="text-lg text-primary font-medium">
-                Total Area: {(parseFloat(height) * parseFloat(width)).toFixed(2)} m²
+                Total Image Area: {(parseFloat(height) * parseFloat(width)).toFixed(2)} m²
+              </p>
+              <p className="text-xl text-primary font-bold">
+                Drawing Coverage: {maskCoverage.toFixed(1)}%
+              </p>
+              <p className="text-sm text-primary/80">
+                of the total image area
               </p>
             </div>
           </Card>
