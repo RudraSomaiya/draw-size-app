@@ -6,6 +6,8 @@ import { Upload, ArrowRight, Image as ImageIcon } from "lucide-react";
 
 const ImageUpload = () => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -17,6 +19,7 @@ const ImageUpload = () => {
         setSelectedImage(e.target?.result as string);
       };
       reader.readAsDataURL(file);
+      setSelectedFile(file);
     }
   };
 
@@ -50,10 +53,33 @@ const ImageUpload = () => {
     fileInputRef.current?.click();
   };
 
-  const handleNext = () => {
-    if (selectedImage) {
-      // Pass the image data through navigation state
-      navigate('/drawing', { state: { imageData: selectedImage } });
+  const handleNext = async () => {
+    if (!selectedFile) return;
+
+    try {
+      setIsUploading(true);
+      const apiBase = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+      const form = new FormData();
+      form.append('file', selectedFile);
+
+      const res = await fetch(`${apiBase}/upload`, {
+        method: 'POST',
+        body: form
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Upload failed (${res.status})`);
+      }
+
+      const data = await res.json();
+      // Navigate to corner selection with backend image id and preview
+      navigate('/corners', { state: { imageId: data.image_id, imageData: data.image_data } });
+    } catch (e: any) {
+      console.error('Upload error:', e);
+      alert(e?.message || 'Failed to upload image');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -125,9 +151,10 @@ const ImageUpload = () => {
                   onClick={handleNext}
                   className="px-8 py-3 text-lg"
                   size="lg"
+                  disabled={isUploading}
                 >
                   <ArrowRight size={20} />
-                  Next
+                  {isUploading ? 'Uploading...' : 'Next'}
                 </Button>
               </div>
             </div>

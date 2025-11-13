@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import ImageUpload from "./pages/ImageUpload";
+import CornerSelection from "./pages/CornerSelection";
 import DrawingCanvas from "./pages/DrawingCanvas";
 import Dimensions from "./pages/Dimensions";
 import NotFound from "./pages/NotFound";
@@ -19,6 +20,7 @@ const App = () => (
         <Routes>
           <Route path="/" element={<ImageUpload />} />
           <Route path="/drawing" element={<DrawingCanvas />} />
+          <Route path="/corners" element={<CornerSelection />} />
           <Route path="/dimensions" element={<Dimensions />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
