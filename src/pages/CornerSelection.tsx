@@ -130,8 +130,8 @@ const CornerSelection: React.FC = () => {
       }
       const data = await res.json();
 
-      // Navigate to drawing with transformed image
-      navigate("/drawing", { state: { imageData: data.transformed_image, realDimensions: data.real_dimensions } });
+      // Navigate to drawing with transformed image and imageId
+      navigate("/drawing", { state: { imageData: data.transformed_image, realDimensions: data.real_dimensions, imageId } });
     } catch (e: any) {
       console.error("Transform error:", e);
       alert(e?.message || "Failed to transform image");

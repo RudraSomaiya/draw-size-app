@@ -2,13 +2,16 @@ import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Pencil, Eraser, Undo, Trash2, ArrowRight, ArrowLeft, RotateCcw } from "lucide-react";
+import { Pencil, Eraser, Undo, Redo, Trash2, ArrowRight, ArrowLeft, RotateCcw, Eye, EyeOff } from "lucide-react";
 
-// Action types for drawing history - store in image-space so we can rebuild independent of view transform
-type DrawAction = {
-  type: "draw" | "erase";
-  points: { x: number; y: number }[]; // image-space points
-  strokeWidth: number; // image-space width
+// Rectangle annotation type in image-space
+type RectAnno = {
+  id: string;
+  x: number; // top-left in image pixels
+  y: number;
+  width: number;
+  height: number;
+  color?: string;
 };
 
 // Transform matrix for zoom/pan operations (image space -> screen space)
@@ -41,11 +44,13 @@ const DrawingCanvas = () => {
   const lastGestureRef = useRef<{ midX: number; midY: number; dist: number; scale: number; tx: number; ty: number } | null>(null);
 
   // State
-  const [activeTool, setActiveTool] = useState<"draw" | "erase">("draw");
-  const [actionHistory, setActionHistory] = useState<DrawAction[]>([]);
-  const [brushWidth, setBrushWidth] = useState([15]);
+  const [activeTool, setActiveTool] = useState<"draw" | "erase">("draw"); // draw = rectangle tool
+  const [rects, setRects] = useState<RectAnno[]>([]);
+  const [tempRect, setTempRect] = useState<RectAnno | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[]>([]);
+  const [showLabels, setShowLabels] = useState(true);
+  const undoStack = useRef<RectAnno[][]>([]);
+  const redoStack = useRef<RectAnno[][]>([]);
   const [transform, setTransform] = useState<TransformMatrix>({ scale: 1, translateX: 0, translateY: 0 });
   const [imageRect, setImageRect] = useState<ImageRect>({ x: 0, y: 0, width: 0, height: 0 });
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
@@ -53,7 +58,11 @@ const DrawingCanvas = () => {
   const [showBrushPreview, setShowBrushPreview] = useState(false);
 
   const imageData = location.state?.imageData;
+  const imageId: string | undefined = location.state?.imageId;
   const restoredActionHistory = location.state?.actionHistory || [];
+  const restoredRects = (location.state?.rects as RectAnno[] | undefined) || [];
+  const initialRealDimensions = location.state?.realDimensions as { width: number; height: number; unit: string } | undefined;
+  const [dims, setDims] = useState<{ width: number; height: number; unit: string } | undefined>(initialRealDimensions);
 
   // Screen to image coordinate conversion using inverse transform
   const screenToImage = useCallback((screenX: number, screenY: number) => {
@@ -128,14 +137,56 @@ const DrawingCanvas = () => {
     img.src = imageData;
   }, [imageData]);
 
-  // Restore action history when component loads (will be completed after rebuildMask is defined)
+  // Restore rectangles when provided via navigation state
   useEffect(() => {
-    if (restoredActionHistory.length > 0) {
-      setActionHistory(restoredActionHistory);
+    if (restoredRects.length > 0) {
+      setRects(restoredRects);
     }
-  }, [restoredActionHistory]);
+  }, [restoredRects]);
 
-  // Render canvas with image and mask overlay
+  // Initialize dims state and persist it when provided
+  useEffect(() => {
+    if (!imageId) return;
+    if (initialRealDimensions) {
+      setDims(initialRealDimensions);
+      try { localStorage.setItem(`dims:${imageId}`, JSON.stringify(initialRealDimensions)); } catch {}
+    }
+  }, [imageId, initialRealDimensions]);
+
+  // Load rects from localStorage if available for this imageId
+  useEffect(() => {
+    if (!imageId) return;
+    try {
+      const raw = localStorage.getItem(`rects:${imageId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as RectAnno[];
+        if (parsed && parsed.length > 0) setRects(parsed);
+      }
+    } catch {}
+  }, [imageId]);
+
+  // Load dims from localStorage if not provided
+  useEffect(() => {
+    if (!imageId) return;
+    if (dims) return;
+    try {
+      const raw = localStorage.getItem(`dims:${imageId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { width: number; height: number; unit: string };
+        setDims(parsed);
+      }
+    } catch {}
+  }, [imageId, dims]);
+
+  // Save rects to localStorage on change
+  useEffect(() => {
+    if (!imageId) return;
+    try {
+      localStorage.setItem(`rects:${imageId}`,(JSON.stringify(rects)));
+    } catch {}
+  }, [imageId, rects]);
+
+  // Render canvas with image and rectangles overlay
   const renderCanvas = useCallback(() => {
     if (!canvasRef.current || !loadedImage) return;
 
@@ -151,41 +202,65 @@ const DrawingCanvas = () => {
     ctx.scale(scale, scale);
     ctx.drawImage(loadedImage, 0, 0);
     
-    if (maskCanvasRef.current) {
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = 0.5;
-      ctx.drawImage(maskCanvasRef.current, 0, 0);
-      ctx.globalAlpha = 1;
+    // Draw rectangles (existing)
+    for (const r of rects) {
+      ctx.save();
+      ctx.strokeStyle = r.color || 'rgba(255,0,0,0.9)';
+      ctx.fillStyle = 'rgba(255,0,0,0.15)';
+      ctx.lineWidth = 2 / Math.max(1, 1);
+      ctx.beginPath();
+      ctx.rect(r.x, r.y, r.width, r.height);
+      ctx.fill();
+      ctx.stroke();
+      // Labels
+      if (showLabels && dims) {
+        const metersPerPixelX = dims.width / loadedImage.width;
+        const metersPerPixelY = dims.height / loadedImage.height;
+        const wM = Math.max(0, r.width * metersPerPixelX);
+        const hM = Math.max(0, r.height * metersPerPixelY);
+        const label = `${wM.toFixed(2)}m × ${hM.toFixed(2)}m`;
+        ctx.font = '14px sans-serif';
+        const pad = 4;
+        const metrics = ctx.measureText(label);
+        const lw = metrics.width + pad * 2;
+        const lh = 18 + pad * 2;
+        const lx = r.x + 4;
+        const ly = r.y - lh - 4 < 0 ? r.y + 4 : r.y - lh - 4;
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(lx, ly, lw, lh);
+        ctx.fillStyle = 'white';
+        ctx.fillText(label, lx + pad, ly + 14 + pad/2);
+      }
+      ctx.restore();
+    }
+    // Draw temp rectangle when dragging
+    if (tempRect) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,0,0,0.9)';
+      ctx.setLineDash([6, 6]);
+      ctx.lineWidth = 2 / Math.max(1, 1);
+      ctx.strokeRect(tempRect.x, tempRect.y, tempRect.width, tempRect.height);
+      ctx.restore();
     }
     
     ctx.restore();
-  }, [loadedImage, transform]);
+  }, [loadedImage, transform, rects, tempRect, showLabels, dims]);
 
-  // Drawing functions
-  const drawOnMaskImageSpace = useCallback((points: { x: number; y: number }[], strokeWidth: number, isErase: boolean = false) => {
-    if (!maskCanvasRef.current || points.length < 2) return;
-
-    const ctx = maskCanvasRef.current.getContext('2d')!;
-    ctx.globalCompositeOperation = isErase ? 'destination-out' : 'source-over';
-    ctx.strokeStyle = isErase ? 'rgba(0,0,0,1)' : 'rgba(255,0,0,0.8)';
-    ctx.lineWidth = strokeWidth;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
+  // Rect helpers
+  const makeRectFromPoints = (ax: number, ay: number, bx: number, by: number): RectAnno => {
+    const x = Math.min(ax, bx);
+    const y = Math.min(ay, by);
+    const w = Math.abs(bx - ax);
+    const h = Math.abs(by - ay);
+    return { id: crypto.randomUUID(), x, y, width: w, height: h, color: 'rgba(255,0,0,0.9)' };
+  };
+  const hitTestRect = (rx: number, ry: number): number => {
+    for (let i = rects.length - 1; i >= 0; i--) {
+      const r = rects[i];
+      if (rx >= r.x && rx <= r.x + r.width && ry >= r.y && ry <= r.y + r.height) return i;
     }
-    ctx.stroke();
-  }, []);
-
-  const drawOnMask = useCallback((screenPoints: { x: number; y: number }[], strokeWidth: number, isErase: boolean = false) => {
-    const imagePoints = screenPoints.map(p => screenToImage(p.x, p.y));
-    const imageStrokeWidth = Math.max(1, strokeWidth / transform.scale);
-    drawOnMaskImageSpace(imagePoints, imageStrokeWidth, isErase);
-    renderCanvas();
-  }, [screenToImage, transform.scale, drawOnMaskImageSpace, renderCanvas]);
+    return -1;
+  };
 
   // Event handlers
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
@@ -205,15 +280,27 @@ const DrawingCanvas = () => {
       return;
     }
 
-    // Left mouse button for drawing
+    // Left mouse button for draw/erase
     if (e.button === 0) {
       const imgPoint = screenToImage(x, y);
       if (imgPoint.x >= 0 && imgPoint.x <= loadedImage.width && imgPoint.y >= 0 && imgPoint.y <= loadedImage.height) {
-        setIsDrawing(true);
-        setCurrentPath([{ x, y }]);
+        if (activeTool === 'erase') {
+          const idx = hitTestRect(imgPoint.x, imgPoint.y);
+          if (idx !== -1) {
+            undoStack.current.push([...rects]);
+            redoStack.current = [];
+            const next = [...rects];
+            next.splice(idx, 1);
+            setRects(next);
+            renderCanvas();
+          }
+        } else {
+          setIsDrawing(true);
+          setTempRect({ id: 'temp', x: imgPoint.x, y: imgPoint.y, width: 0, height: 0, color: 'rgba(255,0,0,0.9)' });
+        }
       }
     }
-  }, [loadedImage, screenToImage]);
+  }, [loadedImage, screenToImage, activeTool, rects, renderCanvas]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!loadedImage) return;
@@ -248,18 +335,14 @@ const DrawingCanvas = () => {
       return;
     }
 
-    if (!isPanningRef.current && isDrawing) {
+    if (!isPanningRef.current && isDrawing && tempRect) {
       const imgPoint = screenToImage(x, y);
-      if (imgPoint.x >= 0 && imgPoint.x <= loadedImage.width && imgPoint.y >= 0 && imgPoint.y <= loadedImage.height) {
-        const newPath = [...currentPath, { x, y }];
-        setCurrentPath(newPath);
-        if (newPath.length >= 2) {
-          drawOnMask(newPath.slice(-2), brushWidth[0], activeTool === "erase");
-        }
-        e.preventDefault();
-      }
+      const r = makeRectFromPoints(tempRect.x, tempRect.y, imgPoint.x, imgPoint.y);
+      setTempRect({ ...r, id: 'temp' });
+      e.preventDefault();
+      renderCanvas();
     }
-  }, [transform, isDrawing, currentPath, brushWidth, activeTool, loadedImage, screenToImage, drawOnMask, viewportSize, clampTransform]);
+  }, [transform, isDrawing, tempRect, loadedImage, screenToImage, viewportSize, clampTransform, renderCanvas]);
 
   const handlePointerUp = useCallback((e?: React.PointerEvent) => {
     if (e && pointersRef.current.has(e.pointerId)) {
@@ -272,40 +355,42 @@ const DrawingCanvas = () => {
       lastGestureRef.current = null;
     }
 
-    if (!isDrawing || currentPath.length < 2) {
-      setIsDrawing(false);
-      setCurrentPath([]);
-      return;
+    if (!isDrawing) return;
+    if (tempRect && tempRect.width > 2 && tempRect.height > 2) {
+      undoStack.current.push([...rects]);
+      redoStack.current = [];
+      setRects(prev => [...prev, { ...tempRect, id: crypto.randomUUID() }]);
     }
-
-    const imagePoints = currentPath.map(p => screenToImage(p.x, p.y));
-    const imageStrokeWidth = Math.max(1, brushWidth[0] / transform.scale);
-    const action: DrawAction = {
-      type: activeTool,
-      points: imagePoints,
-      strokeWidth: imageStrokeWidth
-    };
-
-    setActionHistory(prev => [...prev, action]);
+    setTempRect(null);
     setIsDrawing(false);
-    setCurrentPath([]);
-  }, [isDrawing, currentPath, activeTool, brushWidth, screenToImage, transform.scale]);
+  }, [isDrawing, tempRect, rects]);
 
   // Tool handlers
   const handleUndo = () => {
-    if (actionHistory.length > 0) {
-      setActionHistory(prev => prev.slice(0, -1));
-      rebuildMask(actionHistory.slice(0, -1));
+    if (rects.length === 0) return;
+    redoStack.current.push([...rects]);
+    const prev = undoStack.current.pop();
+    if (prev) setRects(prev);
+  };
+
+  const handleRedo = () => {
+    const next = redoStack.current.pop();
+    if (next) {
+      undoStack.current.push([...rects]);
+      setRects(next);
     }
   };
 
   const handleClearAll = () => {
-    setActionHistory([]);
+    if (rects.length === 0) return;
+    undoStack.current.push([...rects]);
+    redoStack.current = [];
+    setRects([]);
     if (maskCanvasRef.current && loadedImage) {
       const ctx = maskCanvasRef.current.getContext('2d')!;
       ctx.clearRect(0, 0, loadedImage.width, loadedImage.height);
-      renderCanvas();
     }
+    renderCanvas();
   };
 
   const handleResetView = () => {
@@ -318,23 +403,20 @@ const DrawingCanvas = () => {
     setTransform({ scale: fitScale, translateX: tx, translateY: ty });
   };
 
-  const rebuildMask = useCallback((actions: DrawAction[]) => {
+  const rebuildMask = useCallback(() => {
     if (!maskCanvasRef.current || !loadedImage) return;
-
     const ctx = maskCanvasRef.current.getContext('2d')!;
     ctx.clearRect(0, 0, loadedImage.width, loadedImage.height);
+    // Fill rectangles onto mask for future coverage calculation
+    ctx.fillStyle = 'rgba(255,0,0,1)';
+    rects.forEach(r => ctx.fillRect(r.x, r.y, r.width, r.height));
+  }, [loadedImage, rects]);
 
-    actions.forEach(action => {
-      drawOnMaskImageSpace(action.points, action.strokeWidth, action.type === 'erase');
-    });
-  }, [drawOnMaskImageSpace, loadedImage]);
-
-  // Rebuild mask when action history is restored
+  // Rebuild mask when rects change
   useEffect(() => {
-    if (restoredActionHistory.length > 0 && loadedImage) {
-      rebuildMask(restoredActionHistory);
-    }
-  }, [restoredActionHistory, loadedImage, rebuildMask]);
+    rebuildMask();
+    renderCanvas();
+  }, [rects, rebuildMask, renderCanvas]);
 
   useEffect(() => {
     renderCanvas();
@@ -390,7 +472,7 @@ const DrawingCanvas = () => {
     handlePointerDown(e);
   }, [handlePointerDown]);
 
-  // Calculate mask coverage percentage
+  // Calculate mask coverage percentage (from rects mask)
   const calculateMaskCoverage = useCallback(() => {
     if (!maskCanvasRef.current || !loadedImage) return 0;
     
@@ -420,7 +502,9 @@ const DrawingCanvas = () => {
         originalImage: imageData,
         annotatedImage: imageData,
         maskCoverage: coveragePercentage,
-        actionHistory: actionHistory
+        rects: rects,
+        imageId,
+        realDimensions: dims
       } 
     });
   };
@@ -458,7 +542,7 @@ const DrawingCanvas = () => {
             <Button variant="ghost" size="icon" onClick={handleBack}>
               <ArrowLeft size={24} />
             </Button>
-            <h1 className="text-2xl font-bold text-foreground">Draw Selection</h1>
+            <h1 className="text-2xl font-bold text-foreground">Annotate</h1>
           </div>
 
           {/* Tool Selection */}
@@ -471,7 +555,7 @@ const DrawingCanvas = () => {
                 className="h-16 flex flex-col gap-2"
               >
                 <Pencil size={24} />
-                <span className="text-sm">Draw</span>
+                <span className="text-sm">Rectangle</span>
               </Button>
               <Button
                 variant={activeTool === 'erase' ? 'default' : 'outline'}
@@ -484,42 +568,24 @@ const DrawingCanvas = () => {
             </div>
           </div>
 
-          {/* Brush Size Control */}
+          {/* Label toggle */}
           <div className="mb-8">
-            <h3 className="text-lg font-semibold text-foreground mb-4">
-              Selection Size: {brushWidth[0]}px
-            </h3>
-            
-            <div className="flex justify-center mb-6">
-              <div className="relative h-20 flex items-center justify-center">
-                <div
-                  className={`border-2 border-primary rounded-full bg-primary/20 transition-all duration-200 ${
-                    showBrushPreview ? 'opacity-100 scale-100' : 'opacity-0 scale-75'
-                  }`}
-                  style={{
-                    width: Math.min(brushWidth[0], 60),
-                    height: Math.min(brushWidth[0], 60),
-                  }}
-                />
-              </div>
-            </div>
-            
-            <div
-              onPointerEnter={() => setShowBrushPreview(true)}
-              onPointerLeave={() => setShowBrushPreview(false)}
-            >
-              <Slider
-                value={brushWidth}
-                onValueChange={(value) => {
-                  setBrushWidth(value);
-                  setShowBrushPreview(true);
-                }}
-                onPointerUp={() => setShowBrushPreview(false)}
-                max={50}
-                min={5}
-                step={1}
-                className="w-full"
-              />
+            <h3 className="text-lg font-semibold text-foreground mb-4">Labels</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                variant={showLabels ? 'default' : 'outline'}
+                onClick={() => setShowLabels(true)}
+                className="h-12"
+              >
+                <Eye className="mr-2" size={18} /> Show
+              </Button>
+              <Button
+                variant={!showLabels ? 'default' : 'outline'}
+                onClick={() => setShowLabels(false)}
+                className="h-12"
+              >
+                <EyeOff className="mr-2" size={18} /> Hide
+              </Button>
             </div>
           </div>
 
@@ -530,11 +596,19 @@ const DrawingCanvas = () => {
               <Button
                 variant="outline"
                 onClick={handleUndo}
-                disabled={actionHistory.length === 0}
+                disabled={rects.length === 0}
                 className="w-full justify-start"
               >
                 <Undo size={20} className="mr-2" />
                 Undo
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleRedo}
+                className="w-full justify-start"
+              >
+                <Redo size={20} className="mr-2" />
+                Redo
               </Button>
               <Button
                 variant="outline"

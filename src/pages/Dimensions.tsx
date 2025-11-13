@@ -14,7 +14,7 @@ const Dimensions = () => {
   const [width, setWidth] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  const { originalImage, annotatedImage, maskCoverage = 0, actionHistory = [] } = location.state || {};
+  const { originalImage, annotatedImage, maskCoverage = 0, rects = [], imageId, realDimensions } = location.state || {};
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,8 +51,10 @@ const Dimensions = () => {
   const handleBack = () => {
     navigate('/drawing', { 
       state: { 
-        imageData: originalImage,
-        actionHistory: actionHistory
+        imageData: annotatedImage,
+        rects: rects,
+        imageId,
+        realDimensions
       } 
     });
   };
