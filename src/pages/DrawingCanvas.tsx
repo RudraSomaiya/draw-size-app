@@ -2,17 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Pencil, Eraser, Undo, Redo, Trash2, ArrowRight, ArrowLeft, RotateCcw, Eye, EyeOff } from "lucide-react";
-
-// Rectangle annotation type in image-space
-type RectAnno = {
-  id: string;
-  x: number; // top-left in image pixels
-  y: number;
-  width: number;
-  height: number;
-  color?: string;
-};
+import { Pencil, Eraser, Undo, Redo, Trash2, ArrowRight, ArrowLeft, RotateCcw } from "lucide-react";
 
 // Transform matrix for zoom/pan operations (image space -> screen space)
 type TransformMatrix = {
@@ -36,6 +26,7 @@ const DrawingCanvas = () => {
   // Canvas refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+  const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
@@ -44,13 +35,11 @@ const DrawingCanvas = () => {
   const lastGestureRef = useRef<{ midX: number; midY: number; dist: number; scale: number; tx: number; ty: number } | null>(null);
 
   // State
-  const [activeTool, setActiveTool] = useState<"draw" | "erase">("draw"); // draw = rectangle tool
-  const [rects, setRects] = useState<RectAnno[]>([]);
-  const [tempRect, setTempRect] = useState<RectAnno | null>(null);
+  const [activeTool, setActiveTool] = useState<"add" | "subtract">("add"); // quick select / deselect
   const [isDrawing, setIsDrawing] = useState(false);
-  const [showLabels, setShowLabels] = useState(true);
-  const undoStack = useRef<RectAnno[][]>([]);
-  const redoStack = useRef<RectAnno[][]>([]);
+  const [brushSize, setBrushSize] = useState(30);
+  const undoStack = useRef<ImageData[]>([]);
+  const redoStack = useRef<ImageData[]>([]);
   const [transform, setTransform] = useState<TransformMatrix>({ scale: 1, translateX: 0, translateY: 0 });
   const [imageRect, setImageRect] = useState<ImageRect>({ x: 0, y: 0, width: 0, height: 0 });
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
@@ -60,7 +49,6 @@ const DrawingCanvas = () => {
   const imageData = location.state?.imageData;
   const imageId: string | undefined = location.state?.imageId;
   const restoredActionHistory = location.state?.actionHistory || [];
-  const restoredRects = (location.state?.rects as RectAnno[] | undefined) || [];
   const initialRealDimensions = location.state?.realDimensions as { width: number; height: number; unit: string } | undefined;
   const [dims, setDims] = useState<{ width: number; height: number; unit: string } | undefined>(initialRealDimensions);
 
@@ -102,6 +90,9 @@ const DrawingCanvas = () => {
     if (!maskCanvasRef.current) {
       maskCanvasRef.current = document.createElement('canvas');
     }
+    if (!sourceCanvasRef.current) {
+      sourceCanvasRef.current = document.createElement('canvas');
+    }
 
     const img = new Image();
     img.onload = () => {
@@ -109,6 +100,7 @@ const DrawingCanvas = () => {
       
       const canvas = canvasRef.current!;
       const maskCanvas = maskCanvasRef.current!;
+      const srcCanvas = sourceCanvasRef.current!;
       const canvasWrap = canvasWrapRef.current!;
       
       // Use actual canvas wrapper dimensions
@@ -126,6 +118,12 @@ const DrawingCanvas = () => {
       
       maskCanvas.width = img.width;
       maskCanvas.height = img.height;
+      srcCanvas.width = img.width;
+      srcCanvas.height = img.height;
+
+      const sctx = srcCanvas.getContext('2d')!;
+      sctx.clearRect(0, 0, img.width, img.height);
+      sctx.drawImage(img, 0, 0);
 
       const fitScale = Math.min(viewportWidth / img.width, viewportHeight / img.height);
       const tx = (viewportWidth - img.width * fitScale) / 2;
@@ -137,13 +135,6 @@ const DrawingCanvas = () => {
     img.src = imageData;
   }, [imageData]);
 
-  // Restore rectangles when provided via navigation state
-  useEffect(() => {
-    if (restoredRects.length > 0) {
-      setRects(restoredRects);
-    }
-  }, [restoredRects]);
-
   // Initialize dims state and persist it when provided
   useEffect(() => {
     if (!imageId) return;
@@ -152,18 +143,6 @@ const DrawingCanvas = () => {
       try { localStorage.setItem(`dims:${imageId}`, JSON.stringify(initialRealDimensions)); } catch {}
     }
   }, [imageId, initialRealDimensions]);
-
-  // Load rects from localStorage if available for this imageId
-  useEffect(() => {
-    if (!imageId) return;
-    try {
-      const raw = localStorage.getItem(`rects:${imageId}`);
-      if (raw) {
-        const parsed = JSON.parse(raw) as RectAnno[];
-        if (parsed && parsed.length > 0) setRects(parsed);
-      }
-    } catch {}
-  }, [imageId]);
 
   // Load dims from localStorage if not provided
   useEffect(() => {
@@ -178,15 +157,96 @@ const DrawingCanvas = () => {
     } catch {}
   }, [imageId, dims]);
 
-  // Save rects to localStorage on change
-  useEffect(() => {
-    if (!imageId) return;
-    try {
-      localStorage.setItem(`rects:${imageId}`,(JSON.stringify(rects)));
-    } catch {}
-  }, [imageId, rects]);
+  // Color-aware brush: apply selection/deselection around a point in image-space
+  // Uses a small connected region grow (flood-fill style) constrained by brush radius
+  const applyBrush = useCallback((imgX: number, imgY: number, isAdd: boolean) => {
+    if (!loadedImage || !maskCanvasRef.current || !sourceCanvasRef.current) return;
 
-  // Render canvas with image and rectangles overlay
+    const maskCanvas = maskCanvasRef.current;
+    const srcCanvas = sourceCanvasRef.current;
+    const srcCtx = srcCanvas.getContext('2d');
+    const maskCtx = maskCanvas.getContext('2d');
+    if (!srcCtx || !maskCtx) return;
+
+    const radius = Math.max(4, brushSize / 2);
+    const x0 = Math.max(0, Math.floor(imgX - radius));
+    const y0 = Math.max(0, Math.floor(imgY - radius));
+    const x1 = Math.min(loadedImage.width - 1, Math.ceil(imgX + radius));
+    const y1 = Math.min(loadedImage.height - 1, Math.ceil(imgY + radius));
+    const w = x1 - x0 + 1;
+    const h = y1 - y0 + 1;
+    if (w <= 0 || h <= 0) return;
+
+    const srcData = srcCtx.getImageData(x0, y0, w, h);
+    const maskData = maskCtx.getImageData(x0, y0, w, h);
+    const s = srcData.data;
+    const m = maskData.data;
+
+    const cx = Math.round(imgX) - x0;
+    const cy = Math.round(imgY) - y0;
+    const cIndex = (cy * w + cx) * 4;
+    const cr = s[cIndex];
+    const cg = s[cIndex + 1];
+    const cb = s[cIndex + 2];
+
+    // Slightly looser threshold so cement / wall tones are captured
+    const threshold = 60; // color distance threshold
+    const r2 = radius * radius;
+
+    // Connected flood-fill within radius & color threshold
+    const visited = new Uint8Array(w * h);
+    const queue: number[] = [];
+    const push = (qx: number, qy: number) => {
+      if (qx < 0 || qx >= w || qy < 0 || qy >= h) return;
+      const dx = qx - cx;
+      const dy = qy - cy;
+      if (dx * dx + dy * dy > r2) return;
+      const qIndex = qy * w + qx;
+      if (visited[qIndex]) return;
+      visited[qIndex] = 1;
+      queue.push(qx, qy);
+    };
+
+    push(cx, cy);
+
+    while (queue.length) {
+      const qy = queue.pop()!;
+      const qx = queue.pop()!;
+      const idx = (qy * w + qx) * 4;
+
+      const r = s[idx];
+      const g = s[idx + 1];
+      const b = s[idx + 2];
+      const dr = r - cr;
+      const dg = g - cg;
+      const db = b - cb;
+      const dist2 = dr * dr + dg * dg + db * db;
+      if (dist2 > threshold * threshold) {
+        continue;
+      }
+
+      if (isAdd) {
+        // Mark selected: solid red mask
+        m[idx] = 255;
+        m[idx + 1] = 0;
+        m[idx + 2] = 0;
+        m[idx + 3] = 255;
+      } else {
+        // Deselect: clear alpha
+        m[idx + 3] = 0;
+      }
+
+      // Explore 4-neighbors
+      push(qx + 1, qy);
+      push(qx - 1, qy);
+      push(qx, qy + 1);
+      push(qx, qy - 1);
+    }
+
+    maskCtx.putImageData(maskData, x0, y0);
+  }, [brushSize, loadedImage]);
+
+  // Render canvas with image and mask overlay
   const renderCanvas = useCallback(() => {
     if (!canvasRef.current || !loadedImage) return;
 
@@ -201,66 +261,15 @@ const DrawingCanvas = () => {
     ctx.translate(translateX, translateY);
     ctx.scale(scale, scale);
     ctx.drawImage(loadedImage, 0, 0);
-    
-    // Draw rectangles (existing)
-    for (const r of rects) {
-      ctx.save();
-      ctx.strokeStyle = r.color || 'rgba(255,0,0,0.9)';
-      ctx.fillStyle = 'rgba(255,0,0,0.15)';
-      ctx.lineWidth = 2 / Math.max(1, 1);
-      ctx.beginPath();
-      ctx.rect(r.x, r.y, r.width, r.height);
-      ctx.fill();
-      ctx.stroke();
-      // Labels
-      if (showLabels && dims) {
-        const metersPerPixelX = dims.width / loadedImage.width;
-        const metersPerPixelY = dims.height / loadedImage.height;
-        const wM = Math.max(0, r.width * metersPerPixelX);
-        const hM = Math.max(0, r.height * metersPerPixelY);
-        const label = `${wM.toFixed(2)}m × ${hM.toFixed(2)}m`;
-        ctx.font = '14px sans-serif';
-        const pad = 4;
-        const metrics = ctx.measureText(label);
-        const lw = metrics.width + pad * 2;
-        const lh = 18 + pad * 2;
-        const lx = r.x + 4;
-        const ly = r.y - lh - 4 < 0 ? r.y + 4 : r.y - lh - 4;
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(lx, ly, lw, lh);
-        ctx.fillStyle = 'white';
-        ctx.fillText(label, lx + pad, ly + 14 + pad/2);
-      }
-      ctx.restore();
-    }
-    // Draw temp rectangle when dragging
-    if (tempRect) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255,0,0,0.9)';
-      ctx.setLineDash([6, 6]);
-      ctx.lineWidth = 2 / Math.max(1, 1);
-      ctx.strokeRect(tempRect.x, tempRect.y, tempRect.width, tempRect.height);
-      ctx.restore();
-    }
-    
-    ctx.restore();
-  }, [loadedImage, transform, rects, tempRect, showLabels, dims]);
 
-  // Rect helpers
-  const makeRectFromPoints = (ax: number, ay: number, bx: number, by: number): RectAnno => {
-    const x = Math.min(ax, bx);
-    const y = Math.min(ay, by);
-    const w = Math.abs(bx - ax);
-    const h = Math.abs(by - ay);
-    return { id: crypto.randomUUID(), x, y, width: w, height: h, color: 'rgba(255,0,0,0.9)' };
-  };
-  const hitTestRect = (rx: number, ry: number): number => {
-    for (let i = rects.length - 1; i >= 0; i--) {
-      const r = rects[i];
-      if (rx >= r.x && rx <= r.x + r.width && ry >= r.y && ry <= r.y + r.height) return i;
+    if (maskCanvasRef.current) {
+      ctx.globalAlpha = 0.4;
+      ctx.drawImage(maskCanvasRef.current, 0, 0);
+      ctx.globalAlpha = 1;
     }
-    return -1;
-  };
+
+    ctx.restore();
+  }, [loadedImage, transform]);
 
   // Event handlers
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
@@ -280,27 +289,23 @@ const DrawingCanvas = () => {
       return;
     }
 
-    // Left mouse button for draw/erase
+    // Left mouse button for quick select / deselect
     if (e.button === 0) {
       const imgPoint = screenToImage(x, y);
-      if (imgPoint.x >= 0 && imgPoint.x <= loadedImage.width && imgPoint.y >= 0 && imgPoint.y <= loadedImage.height) {
-        if (activeTool === 'erase') {
-          const idx = hitTestRect(imgPoint.x, imgPoint.y);
-          if (idx !== -1) {
-            undoStack.current.push([...rects]);
-            redoStack.current = [];
-            const next = [...rects];
-            next.splice(idx, 1);
-            setRects(next);
-            renderCanvas();
-          }
-        } else {
-          setIsDrawing(true);
-          setTempRect({ id: 'temp', x: imgPoint.x, y: imgPoint.y, width: 0, height: 0, color: 'rgba(255,0,0,0.9)' });
-        }
+      if (
+        imgPoint.x >= 0 && imgPoint.x <= loadedImage.width &&
+        imgPoint.y >= 0 && imgPoint.y <= loadedImage.height &&
+        maskCanvasRef.current && sourceCanvasRef.current
+      ) {
+        const maskCtx = maskCanvasRef.current.getContext('2d')!;
+        const snapshot = maskCtx.getImageData(0, 0, loadedImage.width, loadedImage.height);
+        undoStack.current.push(snapshot);
+        redoStack.current = [];
+        setIsDrawing(true);
+        applyBrush(imgPoint.x, imgPoint.y, activeTool === 'add');
       }
     }
-  }, [loadedImage, screenToImage, activeTool, rects, renderCanvas]);
+  }, [loadedImage, screenToImage, activeTool, renderCanvas, applyBrush]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!loadedImage) return;
@@ -335,14 +340,13 @@ const DrawingCanvas = () => {
       return;
     }
 
-    if (!isPanningRef.current && isDrawing && tempRect) {
+    if (!isPanningRef.current && isDrawing) {
       const imgPoint = screenToImage(x, y);
-      const r = makeRectFromPoints(tempRect.x, tempRect.y, imgPoint.x, imgPoint.y);
-      setTempRect({ ...r, id: 'temp' });
+      applyBrush(imgPoint.x, imgPoint.y, activeTool === 'add');
       e.preventDefault();
       renderCanvas();
     }
-  }, [transform, isDrawing, tempRect, loadedImage, screenToImage, viewportSize, clampTransform, renderCanvas]);
+  }, [transform, isDrawing, loadedImage, screenToImage, viewportSize, clampTransform, renderCanvas, activeTool, applyBrush]);
 
   const handlePointerUp = useCallback((e?: React.PointerEvent) => {
     if (e && pointersRef.current.has(e.pointerId)) {
@@ -356,40 +360,41 @@ const DrawingCanvas = () => {
     }
 
     if (!isDrawing) return;
-    if (tempRect && tempRect.width > 2 && tempRect.height > 2) {
-      undoStack.current.push([...rects]);
-      redoStack.current = [];
-      setRects(prev => [...prev, { ...tempRect, id: crypto.randomUUID() }]);
-    }
-    setTempRect(null);
     setIsDrawing(false);
-  }, [isDrawing, tempRect, rects]);
+  }, [isDrawing]);
 
   // Tool handlers
   const handleUndo = () => {
-    if (rects.length === 0) return;
-    redoStack.current.push([...rects]);
+    if (!maskCanvasRef.current || undoStack.current.length === 0 || !loadedImage) return;
+    const maskCtx = maskCanvasRef.current.getContext('2d')!;
+    const current = maskCtx.getImageData(0, 0, loadedImage.width, loadedImage.height);
+    redoStack.current.push(current);
     const prev = undoStack.current.pop();
-    if (prev) setRects(prev);
+    if (prev) {
+      maskCtx.putImageData(prev, 0, 0);
+      renderCanvas();
+    }
   };
 
   const handleRedo = () => {
+    if (!maskCanvasRef.current || redoStack.current.length === 0 || !loadedImage) return;
+    const maskCtx = maskCanvasRef.current.getContext('2d')!;
+    const current = maskCtx.getImageData(0, 0, loadedImage.width, loadedImage.height);
+    undoStack.current.push(current);
     const next = redoStack.current.pop();
     if (next) {
-      undoStack.current.push([...rects]);
-      setRects(next);
+      maskCtx.putImageData(next, 0, 0);
+      renderCanvas();
     }
   };
 
   const handleClearAll = () => {
-    if (rects.length === 0) return;
-    undoStack.current.push([...rects]);
+    if (!maskCanvasRef.current || !loadedImage) return;
+    const ctx = maskCanvasRef.current.getContext('2d')!;
+    const current = ctx.getImageData(0, 0, loadedImage.width, loadedImage.height);
+    undoStack.current.push(current);
     redoStack.current = [];
-    setRects([]);
-    if (maskCanvasRef.current && loadedImage) {
-      const ctx = maskCanvasRef.current.getContext('2d')!;
-      ctx.clearRect(0, 0, loadedImage.width, loadedImage.height);
-    }
+    ctx.clearRect(0, 0, loadedImage.width, loadedImage.height);
     renderCanvas();
   };
 
@@ -402,21 +407,6 @@ const DrawingCanvas = () => {
     const ty = (vh - loadedImage.height * fitScale) / 2;
     setTransform({ scale: fitScale, translateX: tx, translateY: ty });
   };
-
-  const rebuildMask = useCallback(() => {
-    if (!maskCanvasRef.current || !loadedImage) return;
-    const ctx = maskCanvasRef.current.getContext('2d')!;
-    ctx.clearRect(0, 0, loadedImage.width, loadedImage.height);
-    // Fill rectangles onto mask for future coverage calculation
-    ctx.fillStyle = 'rgba(255,0,0,1)';
-    rects.forEach(r => ctx.fillRect(r.x, r.y, r.width, r.height));
-  }, [loadedImage, rects]);
-
-  // Rebuild mask when rects change
-  useEffect(() => {
-    rebuildMask();
-    renderCanvas();
-  }, [rects, rebuildMask, renderCanvas]);
 
   useEffect(() => {
     renderCanvas();
@@ -472,7 +462,7 @@ const DrawingCanvas = () => {
     handlePointerDown(e);
   }, [handlePointerDown]);
 
-  // Calculate mask coverage percentage (from rects mask)
+  // Calculate mask coverage percentage (from selection mask)
   const calculateMaskCoverage = useCallback(() => {
     if (!maskCanvasRef.current || !loadedImage) return 0;
     
@@ -502,7 +492,6 @@ const DrawingCanvas = () => {
         originalImage: imageData,
         annotatedImage: imageData,
         maskCoverage: coveragePercentage,
-        rects: rects,
         imageId,
         realDimensions: dims
       } 
@@ -550,42 +539,36 @@ const DrawingCanvas = () => {
             <h3 className="text-lg font-semibold text-foreground mb-4">Tools</h3>
             <div className="grid grid-cols-2 gap-3">
               <Button
-                variant={activeTool === 'draw' ? 'default' : 'outline'}
-                onClick={() => setActiveTool('draw')}
+                variant={activeTool === 'add' ? 'default' : 'outline'}
+                onClick={() => setActiveTool('add')}
                 className="h-16 flex flex-col gap-2"
               >
                 <Pencil size={24} />
-                <span className="text-sm">Rectangle</span>
+                <span className="text-sm">Quick Select</span>
               </Button>
               <Button
-                variant={activeTool === 'erase' ? 'default' : 'outline'}
-                onClick={() => setActiveTool('erase')}
+                variant={activeTool === 'subtract' ? 'default' : 'outline'}
+                onClick={() => setActiveTool('subtract')}
                 className="h-16 flex flex-col gap-2"
               >
                 <Eraser size={24} />
-                <span className="text-sm">Erase</span>
+                <span className="text-sm">Quick Deselect</span>
               </Button>
             </div>
           </div>
 
-          {/* Label toggle */}
+          {/* Brush Size */}
           <div className="mb-8">
-            <h3 className="text-lg font-semibold text-foreground mb-4">Labels</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <Button
-                variant={showLabels ? 'default' : 'outline'}
-                onClick={() => setShowLabels(true)}
-                className="h-12"
-              >
-                <Eye className="mr-2" size={18} /> Show
-              </Button>
-              <Button
-                variant={!showLabels ? 'default' : 'outline'}
-                onClick={() => setShowLabels(false)}
-                className="h-12"
-              >
-                <EyeOff className="mr-2" size={18} /> Hide
-              </Button>
+            <h3 className="text-lg font-semibold text-foreground mb-4">Brush Size</h3>
+            <div className="space-y-2">
+              <Slider
+                value={[brushSize]}
+                onValueChange={(v) => setBrushSize(v[0] || brushSize)}
+                min={5}
+                max={100}
+                step={1}
+              />
+              <div className="text-sm text-text-soft">{brushSize.toFixed(0)} px</div>
             </div>
           </div>
 
@@ -596,7 +579,6 @@ const DrawingCanvas = () => {
               <Button
                 variant="outline"
                 onClick={handleUndo}
-                disabled={rects.length === 0}
                 className="w-full justify-start"
               >
                 <Undo size={20} className="mr-2" />
@@ -654,7 +636,7 @@ const DrawingCanvas = () => {
               onPointerLeave={handlePointerUp}
               onWheel={handleWheel}
               style={{ 
-                cursor: activeTool === 'draw' ? 'crosshair' : 'grab',
+                cursor: activeTool === 'add' || activeTool === 'subtract' ? 'crosshair' : 'grab',
                 touchAction: 'none'
               }}
               onContextMenu={(e) => e.preventDefault()}
