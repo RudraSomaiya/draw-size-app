@@ -47,6 +47,8 @@ const DrawingCanvas = () => {
   const [showBrushPreview, setShowBrushPreview] = useState(false);
 
   const imageData = location.state?.imageData;
+  const originalImage = location.state?.originalImage;
+  const restoredMaskImage = location.state?.maskImage as string | undefined;
   const imageId: string | undefined = location.state?.imageId;
   const restoredActionHistory = location.state?.actionHistory || [];
   const initialRealDimensions = location.state?.realDimensions as { width: number; height: number; unit: string } | undefined;
@@ -83,7 +85,32 @@ const DrawingCanvas = () => {
     return { scale, translateX, translateY };
   }, []);
 
-  // Initialize canvas and load image
+  // Render canvas with image and mask overlay
+  const renderCanvas = useCallback(() => {
+    if (!canvasRef.current || !loadedImage) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d')!;
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    const { scale, translateX, translateY } = transform;
+    
+    ctx.save();
+    ctx.translate(translateX, translateY);
+    ctx.scale(scale, scale);
+    ctx.drawImage(loadedImage, 0, 0);
+
+    if (maskCanvasRef.current) {
+      ctx.globalAlpha = 0.4;
+      ctx.drawImage(maskCanvasRef.current, 0, 0);
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.restore();
+  }, [loadedImage, transform]);
+
+  // Initialize canvas and load image, optionally restoring an existing mask
   useEffect(() => {
     if (!canvasRef.current || !imageData) return;
     
@@ -125,6 +152,19 @@ const DrawingCanvas = () => {
       sctx.clearRect(0, 0, img.width, img.height);
       sctx.drawImage(img, 0, 0);
 
+      // If we have a previously saved mask, restore it into the mask canvas
+      if (restoredMaskImage) {
+        const maskImg = new Image();
+        maskImg.onload = () => {
+          const mctx = maskCanvas.getContext('2d');
+          if (!mctx) return;
+          mctx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+          mctx.drawImage(maskImg, 0, 0, maskCanvas.width, maskCanvas.height);
+          renderCanvas();
+        };
+        maskImg.src = restoredMaskImage;
+      }
+
       const fitScale = Math.min(viewportWidth / img.width, viewportHeight / img.height);
       const tx = (viewportWidth - img.width * fitScale) / 2;
       const ty = (viewportHeight - img.height * fitScale) / 2;
@@ -133,7 +173,7 @@ const DrawingCanvas = () => {
       setImageRect({ x: tx, y: ty, width: img.width * fitScale, height: img.height * fitScale });
     };
     img.src = imageData;
-  }, [imageData]);
+  }, [imageData, restoredMaskImage]);
 
   // Initialize dims state and persist it when provided
   useEffect(() => {
@@ -246,30 +286,7 @@ const DrawingCanvas = () => {
     maskCtx.putImageData(maskData, x0, y0);
   }, [brushSize, loadedImage]);
 
-  // Render canvas with image and mask overlay
-  const renderCanvas = useCallback(() => {
-    if (!canvasRef.current || !loadedImage) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d')!;
-    
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    const { scale, translateX, translateY } = transform;
-    
-    ctx.save();
-    ctx.translate(translateX, translateY);
-    ctx.scale(scale, scale);
-    ctx.drawImage(loadedImage, 0, 0);
-
-    if (maskCanvasRef.current) {
-      ctx.globalAlpha = 0.4;
-      ctx.drawImage(maskCanvasRef.current, 0, 0);
-      ctx.globalAlpha = 1;
-    }
-
-    ctx.restore();
-  }, [loadedImage, transform]);
+  // (renderCanvas is declared above, before it is first used)
 
   // Event handlers
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
@@ -484,14 +501,44 @@ const DrawingCanvas = () => {
     return (coveredPixels / totalPixels) * 100;
   }, [loadedImage]);
 
+  // Export an annotated image that combines the orthographic image with the cement mask overlay
+  const exportAnnotatedImage = useCallback(() => {
+    if (!loadedImage || !maskCanvasRef.current) return imageData;
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = loadedImage.width;
+    offscreen.height = loadedImage.height;
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) return imageData;
+
+    ctx.clearRect(0, 0, offscreen.width, offscreen.height);
+    ctx.drawImage(loadedImage, 0, 0);
+
+    ctx.globalAlpha = 0.4;
+    ctx.drawImage(maskCanvasRef.current, 0, 0);
+    ctx.globalAlpha = 1;
+
+    return offscreen.toDataURL('image/png');
+  }, [loadedImage, imageData]);
+
   const handleNext = () => {
     const coveragePercentage = calculateMaskCoverage();
+    const annotated = exportAnnotatedImage();
+    let maskImage: string | undefined;
+    if (maskCanvasRef.current) {
+      try {
+        maskImage = maskCanvasRef.current.toDataURL('image/png');
+      } catch {}
+    }
     
     navigate('/dimensions', { 
       state: { 
-        originalImage: imageData,
-        annotatedImage: imageData,
+        // true uploaded image from the very start of the flow
+        originalImage: originalImage ?? imageData,
+        annotatedImage: annotated,
         maskCoverage: coveragePercentage,
+        orthographicImage: imageData,
+        maskImage,
         imageId,
         realDimensions: dims
       } 
@@ -611,11 +658,11 @@ const DrawingCanvas = () => {
             </div>
           </div>
 
-          {/* Continue Button */}
+          {/* Confirm Button */}
           <div className="mt-auto">
             <Button onClick={handleNext} size="lg" className="w-full">
               <ArrowRight size={20} className="mr-2" />
-              Continue to Dimensions
+              Confirm
             </Button>
           </div>
         </div>
