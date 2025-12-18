@@ -2,7 +2,11 @@ import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Pencil, Eraser, Undo, Redo, Trash2, ArrowRight, ArrowLeft, RotateCcw, Droplet } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Pencil, Eraser, Undo, Redo, Trash2, ArrowRight, ArrowLeft, RotateCcw, Droplet, Plus, Square, Circle, ChevronLeft, ChevronRight } from "lucide-react";
 
 // Transform matrix for zoom/pan operations (image space -> screen space)
 type TransformMatrix = {
@@ -17,6 +21,18 @@ type ImageRect = {
   y: number;
   width: number;
   height: number;
+};
+
+type DeselectShape = "rect" | "circle";
+
+type DeselectItem = {
+  id: string;
+  shape: DeselectShape;
+  count: number;
+  length: number; // for rectangles: length
+  breadth: number; // for rectangles: breadth
+  diameter: number; // for circles
+  unit: "m" | "ft";
 };
 
 const DrawingCanvas = () => {
@@ -45,10 +61,15 @@ const DrawingCanvas = () => {
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [loadedImage, setLoadedImage] = useState<HTMLImageElement | null>(null);
   const [showBrushPreview, setShowBrushPreview] = useState(false);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<"annotate" | "deselect">("annotate");
+  const [deselectItems, setDeselectItems] = useState<DeselectItem[]>([]);
+  const [sidebarWidth] = useState(320);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const imageData = location.state?.imageData;
   const originalImage = location.state?.originalImage;
   const restoredMaskImage = location.state?.maskImage as string | undefined;
+  const restoredDeselectItems = location.state?.deselectItems as DeselectItem[] | undefined;
   const imageId: string | undefined = location.state?.imageId;
   const restoredActionHistory = location.state?.actionHistory || [];
   const initialRealDimensions = location.state?.realDimensions as { width: number; height: number; unit: string } | undefined;
@@ -84,6 +105,8 @@ const DrawingCanvas = () => {
 
     return { scale, translateX, translateY };
   }, []);
+
+  // Sidebar has fixed width; no resize drag behavior
 
   // Render canvas with image and mask overlay
   const renderCanvas = useCallback(() => {
@@ -196,6 +219,32 @@ const DrawingCanvas = () => {
       }
     } catch {}
   }, [imageId, dims]);
+
+  // Restore deselection items when coming back from summary
+  useEffect(() => {
+    if (restoredDeselectItems && restoredDeselectItems.length > 0) {
+      setDeselectItems(restoredDeselectItems);
+    }
+  }, [restoredDeselectItems]);
+
+  const handleAddDeselectItem = () => {
+    setDeselectItems(prev => [
+      ...prev,
+      {
+        id: `${Date.now()}-${prev.length}`,
+        shape: "rect",
+        count: 1,
+        length: 1,
+        breadth: 1,
+        diameter: 1,
+        unit: "m",
+      },
+    ]);
+  };
+
+  const updateDeselectItem = <K extends keyof DeselectItem>(id: string, key: K, value: DeselectItem[K]) => {
+    setDeselectItems(prev => prev.map(item => (item.id === id ? { ...item, [key]: value } : item)));
+  };
 
   // Color-aware brush: apply selection/deselection around a point in image-space
   // Uses a small connected region grow (flood-fill style) constrained by brush radius
@@ -623,6 +672,7 @@ const DrawingCanvas = () => {
         maskCoverage: coveragePercentage,
         orthographicImage: imageData,
         maskImage,
+        deselectItems,
         imageId,
         realDimensions: dims
       } 
@@ -654,110 +704,296 @@ const DrawingCanvas = () => {
         MozUserSelect: 'none'
       }}
     >
-      <div className="flex h-screen">
-        {/* Left Sidebar - Tools Panel */}
-        <div className="w-80 bg-surface border-r border-border p-6 flex flex-col">
+      <div className="flex h-screen relative">
+        {/* Left Sidebar - Tools & De-selections Panel */}
+        <div
+          className={`bg-surface border-r border-border flex flex-col transition-[width] duration-150 ease-out overflow-hidden ${
+            isSidebarCollapsed ? 'p-0 border-r-0' : 'p-6'
+          }`}
+          style={{ width: isSidebarCollapsed ? 0 : sidebarWidth, minWidth: isSidebarCollapsed ? 0 : 260 }}
+        >
           {/* Header */}
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center justify-between mb-4">
             <Button variant="ghost" size="icon" onClick={handleBack}>
               <ArrowLeft size={24} />
             </Button>
             <h1 className="text-2xl font-bold text-foreground">Annotate</h1>
           </div>
-
-          {/* Tool Selection */}
-          <div className="mb-8">
-            <h3 className="text-lg font-semibold text-foreground mb-4">Tools</h3>
-            <div className="grid grid-cols-3 gap-3">
-              <Button
-                variant={activeTool === 'add' ? 'default' : 'outline'}
-                onClick={() => setActiveTool('add')}
-                className="h-16 flex flex-col gap-2"
-              >
-                <Pencil size={24} />
-                <span className="text-sm">Quick Select</span>
-              </Button>
-              <Button
-                variant={activeTool === 'subtract' ? 'default' : 'outline'}
-                onClick={() => setActiveTool('subtract')}
-                className="h-16 flex flex-col gap-2"
-              >
-                <Eraser size={24} />
-                <span className="text-sm">Quick Deselect</span>
-              </Button>
-              <Button
-                variant={activeTool === 'flood' ? 'default' : 'outline'}
-                onClick={() => setActiveTool('flood')}
-                className="h-16 flex flex-col gap-2"
-              >
-                <Droplet size={24} />
-                <span className="text-sm">Flood Fill</span>
-              </Button>
-            </div>
+          {/* Sidebar Tabs */}
+          <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl bg-surface-soft p-1">
+            <button
+              type="button"
+              className={`h-10 rounded-lg text-sm font-medium transition-colors ${
+                activeSidebarTab === 'annotate'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-transparent text-text-soft hover:text-foreground'
+              }`}
+              onClick={() => setActiveSidebarTab('annotate')}
+            >
+              Annotate
+            </button>
+            <button
+              type="button"
+              className={`h-10 rounded-lg text-sm font-medium transition-colors ${
+                activeSidebarTab === 'deselect'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-transparent text-text-soft hover:text-foreground'
+              }`}
+              onClick={() => setActiveSidebarTab('deselect')}
+            >
+              De-select
+            </button>
           </div>
 
-          {/* Brush Size */}
-          <div className="mb-8">
-            <h3 className="text-lg font-semibold text-foreground mb-4">Brush Size</h3>
-            <div className="space-y-2">
-              <Slider
-                value={[brushSize]}
-                onValueChange={(v) => setBrushSize(v[0] || brushSize)}
-                min={5}
-                max={100}
-                step={1}
-              />
-              <div className="text-sm text-text-soft">{brushSize.toFixed(0)} px</div>
-            </div>
+          {/* Scrollable content area inside sidebar */}
+          <div className="flex-1 min-h-0 mb-4">
+            <ScrollArea className="h-full pr-2">
+              {activeSidebarTab === 'annotate' ? (
+                <div className="space-y-8">
+                  {/* Tool Selection */}
+                  <div>
+                    <h3 className="text-lg font-semibold text-foreground mb-4">Tools</h3>
+                    <div className="grid grid-cols-3 gap-3">
+                      <Button
+                        variant={activeTool === 'add' ? 'default' : 'outline'}
+                        onClick={() => setActiveTool('add')}
+                        className="h-16 flex flex-col gap-2"
+                      >
+                        <Pencil size={24} />
+                        <span className="text-sm">Quick Select</span>
+                      </Button>
+                      <Button
+                        variant={activeTool === 'subtract' ? 'default' : 'outline'}
+                        onClick={() => setActiveTool('subtract')}
+                        className="h-16 flex flex-col gap-2"
+                      >
+                        <Eraser size={24} />
+                        <span className="text-sm">Quick Deselect</span>
+                      </Button>
+                      <Button
+                        variant={activeTool === 'flood' ? 'default' : 'outline'}
+                        onClick={() => setActiveTool('flood')}
+                        className="h-16 flex flex-col gap-2"
+                      >
+                        <Droplet size={24} />
+                        <span className="text-sm">Flood Fill</span>
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Brush Size */}
+                  <div>
+                    <h3 className="text-lg font-semibold text-foreground mb-4">Brush Size</h3>
+                    <div className="space-y-2">
+                      <Slider
+                        value={[brushSize]}
+                        onValueChange={(v) => setBrushSize(v[0] || brushSize)}
+                        min={5}
+                        max={100}
+                        step={1}
+                      />
+                      <div className="text-sm text-text-soft">{brushSize.toFixed(0)} px</div>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div>
+                    <h3 className="text-lg font-semibold text-foreground mb-4">Actions</h3>
+                    <div className="space-y-3">
+                      <Button
+                        variant="outline"
+                        onClick={handleUndo}
+                        className="w-full justify-start"
+                      >
+                        <Undo size={20} className="mr-2" />
+                        Undo
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={handleRedo}
+                        className="w-full justify-start"
+                      >
+                        <Redo size={20} className="mr-2" />
+                        Redo
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={handleClearAll}
+                        className="w-full justify-start"
+                      >
+                        <Trash2 size={20} className="mr-2" />
+                        Clear All
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={handleResetView}
+                        className="w-full justify-start"
+                      >
+                        <RotateCcw size={20} className="mr-2" />
+                        Reset View
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-lg font-semibold text-foreground">De-selections</h3>
+                    <Button size="icon" variant="outline" onClick={handleAddDeselectItem}>
+                      <Plus size={18} />
+                    </Button>
+                  </div>
+                  <p className="text-xs text-text-soft mb-2">
+                    Use this to subtract fixed areas like windows or doors from the cemented area.
+                  </p>
+
+                  {deselectItems.length === 0 && (
+                    <p className="text-xs text-text-soft">
+                      Click the + button to add your first de-selection.
+                    </p>
+                  )}
+
+                  <div className="space-y-3">
+                    {deselectItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="rounded-xl border border-border bg-surface-soft p-3 space-y-3"
+                      >
+                        {/* First row: Shape, Count, Unit */}
+                        <div className="grid grid-cols-3 gap-2 items-end">
+                          <div className="space-y-1">
+                            <Label className="text-xs text-text-soft">Shape</Label>
+                            <Select
+                              value={item.shape}
+                              onValueChange={(val) =>
+                                updateDeselectItem(item.id, "shape", val as DeselectShape)
+                              }
+                            >
+                              <SelectTrigger className="h-9 w-full px-2 text-xs [&>span:last-child]:hidden">
+                                <SelectValue>
+                                  {item.shape === 'circle' ? (
+                                    <Circle className="w-3 h-3" />
+                                  ) : (
+                                    <Square className="w-3 h-3" />
+                                  )}
+                                </SelectValue>
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="rect">
+                                  <div className="flex items-center gap-2">
+                                    <Square className="w-3 h-3" />
+                                    <span className="text-xs">Square / Rectangle</span>
+                                  </div>
+                                </SelectItem>
+                                <SelectItem value="circle">
+                                  <div className="flex items-center gap-2">
+                                    <Circle className="w-3 h-3" />
+                                    <span className="text-xs">Circle</span>
+                                  </div>
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs text-text-soft">Count</Label>
+                            <Input
+                              type="text"
+                              className="h-9 text-xs"
+                              value={Number.isFinite(item.count) ? item.count : ""}
+                              onChange={(e) => {
+                                const num = Number(e.target.value);
+                                updateDeselectItem(item.id, "count", num);
+                              }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs text-text-soft">Unit</Label>
+                            <Select
+                              value={item.unit}
+                              onValueChange={(val) =>
+                                updateDeselectItem(item.id, 'unit', val as 'm' | 'ft')
+                              }
+                            >
+                              <SelectTrigger className="h-9 text-xs w-full">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="m">meters</SelectItem>
+                                <SelectItem value="ft">feet</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+
+                        {/* Second row: Length/Breadth or Diameter */}
+                        <div className="grid grid-cols-2 gap-2 items-end">
+                          <div className="space-y-1">
+                            <Label className="text-xs text-text-soft">
+                              {item.shape === 'circle' ? 'Diameter' : 'Length'}
+                            </Label>
+                            <Input
+                              type="text"
+                              className="h-9 text-xs"
+                              value={
+                                item.shape === 'circle'
+                                  ? (Number.isFinite(item.diameter) ? item.diameter : "")
+                                  : (Number.isFinite(item.length) ? item.length : "")
+                              }
+                              onChange={(e) => {
+                                const num = Number(e.target.value);
+                                if (item.shape === 'circle') {
+                                  updateDeselectItem(item.id, 'diameter', num);
+                                } else {
+                                  updateDeselectItem(item.id, 'length', num);
+                                }
+                              }}
+                            />
+                          </div>
+                          {item.shape === 'rect' && (
+                            <div className="space-y-1">
+                              <Label className="text-xs text-text-soft">Breadth</Label>
+                              <Input
+                                type="text"
+                                className="h-9 text-xs"
+                                value={Number.isFinite(item.breadth) ? item.breadth : ""}
+                                onChange={(e) => {
+                                  const num = Number(e.target.value);
+                                  updateDeselectItem(item.id, 'breadth', num);
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </ScrollArea>
           </div>
 
-          {/* Action Buttons */}
-          <div className="mb-8">
-            <h3 className="text-lg font-semibold text-foreground mb-4">Actions</h3>
-            <div className="space-y-3">
-              <Button
-                variant="outline"
-                onClick={handleUndo}
-                className="w-full justify-start"
-              >
-                <Undo size={20} className="mr-2" />
-                Undo
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleRedo}
-                className="w-full justify-start"
-              >
-                <Redo size={20} className="mr-2" />
-                Redo
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleClearAll}
-                className="w-full justify-start"
-              >
-                <Trash2 size={20} className="mr-2" />
-                Clear All
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleResetView}
-                className="w-full justify-start"
-              >
-                <RotateCcw size={20} className="mr-2" />
-                Reset View
-              </Button>
-            </div>
-          </div>
-
-          {/* Confirm Button */}
-          <div className="mt-auto">
+          {/* Confirm Button (shared for both tabs) */}
+          <div className="mt-auto pt-2 border-t border-border/60">
             <Button onClick={handleNext} size="lg" className="w-full">
               <ArrowRight size={20} className="mr-2" />
               Confirm
             </Button>
           </div>
         </div>
+
+        {/* Sidebar collapse toggle (no resize handle) */}
+        <button
+          type="button"
+          onClick={() => setIsSidebarCollapsed(prev => !prev)}
+          className="absolute top-1/2 -translate-y-1/2 z-10 rounded-full bg-surface shadow-card border border-border p-1 hover:bg-surface-soft"
+          style={{ left: isSidebarCollapsed ? 8 : sidebarWidth + 8 }}
+        >
+          {isSidebarCollapsed ? (
+            <ChevronRight size={16} />
+          ) : (
+            <ChevronLeft size={16} />
+          )}
+        </button>
 
         {/* Main Canvas Area */}
         <div className="flex-1 relative">

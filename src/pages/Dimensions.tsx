@@ -3,17 +3,84 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Ruler } from "lucide-react";
 
+type DeselectShape = "rect" | "circle";
+
+type DeselectItem = {
+  id: string;
+  shape: DeselectShape;
+  count: number;
+  length: number;
+  breadth: number;
+  diameter: number;
+  unit: "m" | "ft";
+};
+
 const Dimensions = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { originalImage, annotatedImage, maskCoverage = 0, rects = [], imageId, realDimensions, orthographicImage, maskImage } = location.state || {};
+  const { originalImage, annotatedImage, maskCoverage = 0, rects = [], imageId, realDimensions, orthographicImage, maskImage, deselectItems = [] as DeselectItem[] } = location.state || {};
 
   const realWidth = realDimensions?.width ?? 0;
   const realHeight = realDimensions?.height ?? 0;
-  const unit = realDimensions?.unit ?? "m";
+
+  // Normalize unit from backend (e.g. "meters" / "feet") into short codes for calculations
+  const rawUnit = (realDimensions?.unit ?? "m") as string;
+  const unit: "m" | "ft" = rawUnit === "meters" ? "m" : rawUnit === "feet" ? "ft" : (rawUnit as "m" | "ft");
+  const unitLabel = unit === "m" ? "meters" : "feet";
+
   const hasRealDimensions = realWidth > 0 && realHeight > 0;
   const totalArea = hasRealDimensions ? realWidth * realHeight : 0;
-  const cementedArea = hasRealDimensions ? (totalArea * (maskCoverage / 100)) : 0;
+
+  // Convert deselection linear dimensions to the same unit as realDimensions and subtract
+  const convertToBaseUnit = (value: number, fromUnit: "m" | "ft", toUnit: "m" | "ft") => {
+    if (fromUnit === toUnit) return value;
+    const factor = 0.3048; // 1 ft in meters
+    return fromUnit === "ft" && toUnit === "m" ? value * factor : value / factor;
+  };
+
+  const deselectArea = hasRealDimensions
+    ? deselectItems.reduce((sum, item) => {
+        const count = item.count || 0;
+        if (count <= 0) return sum;
+
+        // Convert linear dimensions to the same unit as the main dimensions
+        const lengthInUnit = convertToBaseUnit(item.length || 0, item.unit, unit);
+        const breadthInUnit = convertToBaseUnit(item.breadth || 0, item.unit, unit);
+        const diameterInUnit = convertToBaseUnit(item.diameter || 0, item.unit, unit);
+
+        let areaInUnit = 0;
+        if (item.shape === "rect") {
+          areaInUnit = Math.max(0, lengthInUnit) * Math.max(0, breadthInUnit);
+        } else {
+          const r = Math.max(0, diameterInUnit / 2);
+          areaInUnit = Math.PI * r * r;
+        }
+
+        return sum + count * areaInUnit;
+      }, 0)
+    : 0;
+
+  // Usable facade area after subtracting fixed openings (windows/doors).
+  // Openings cannot exceed the total facade area, so clamp deselectArea.
+  const effectiveDeselectArea = hasRealDimensions ? Math.min(deselectArea, totalArea) : 0;
+  const usableArea = hasRealDimensions ? Math.max(0, totalArea - effectiveDeselectArea) : 0;
+
+  // Final cemented area (sq meters/feet) is the drawn mask percentage of usable area
+  const cementedArea = hasRealDimensions ? (usableArea * (maskCoverage / 100)) : 0;
+
+  if (hasRealDimensions) {
+    // Debug logging to verify deselection & usable area math
+    // eslint-disable-next-line no-console
+    console.log("Area debug", {
+      totalArea,
+      maskCoverage,
+      deselectArea,
+      effectiveDeselectArea,
+      usableArea,
+      cementedArea,
+      deselectItems,
+    });
+  }
 
   const handleBack = () => {
     navigate('/drawing', { 
@@ -22,6 +89,7 @@ const Dimensions = () => {
         imageData: orthographicImage || annotatedImage,
         originalImage,
         maskImage,
+        deselectItems,
         rects: rects,
         imageId,
         realDimensions
@@ -125,13 +193,22 @@ const Dimensions = () => {
                   </p>
                 </div>
 
+                <div className="space-y-1 mt-2">
+                  <p className="text-xs font-medium text-text-soft uppercase">Excluded Openings</p>
+                  <p className="text-sm text-text-soft">
+                    {deselectItems.length === 0
+                      ? "No de-selections were applied."
+                      : `${deselectItems.length} de-selection group${deselectItems.length > 1 ? "s" : ""} subtracting windows/doors from the cemented area.`}
+                  </p>
+                </div>
+
                 <div className="space-y-2 mt-4">
                   <p className="text-xs font-medium text-text-soft uppercase">Cemented Area</p>
                   <p className="text-3xl font-extrabold text-primary">
                     {maskCoverage.toFixed(1)}%
                   </p>
                   <p className="text-sm text-primary/80">
-                    ({cementedArea.toFixed(2)} {unit}² of the total area)
+                    ({cementedArea.toFixed(2)} {unit}² after subtracting openings)
                   </p>
                 </div>
               </div>
