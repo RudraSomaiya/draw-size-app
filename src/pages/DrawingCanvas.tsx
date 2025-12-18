@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Pencil, Eraser, Undo, Redo, Trash2, ArrowRight, ArrowLeft, RotateCcw } from "lucide-react";
+import { Pencil, Eraser, Undo, Redo, Trash2, ArrowRight, ArrowLeft, RotateCcw, Droplet } from "lucide-react";
 
 // Transform matrix for zoom/pan operations (image space -> screen space)
 type TransformMatrix = {
@@ -35,7 +35,7 @@ const DrawingCanvas = () => {
   const lastGestureRef = useRef<{ midX: number; midY: number; dist: number; scale: number; tx: number; ty: number } | null>(null);
 
   // State
-  const [activeTool, setActiveTool] = useState<"add" | "subtract">("add"); // quick select / deselect
+  const [activeTool, setActiveTool] = useState<"add" | "subtract" | "flood">("add"); // quick select / flood fill / deselect
   const [isDrawing, setIsDrawing] = useState(false);
   const [brushSize, setBrushSize] = useState(30);
   const undoStack = useRef<ImageData[]>([]);
@@ -286,6 +286,81 @@ const DrawingCanvas = () => {
     maskCtx.putImageData(maskData, x0, y0);
   }, [brushSize, loadedImage]);
 
+  // Flood-fill brush: expand selection based on color tolerance from a seed point
+  const applyFloodFill = useCallback((imgX: number, imgY: number) => {
+    if (!loadedImage || !maskCanvasRef.current || !sourceCanvasRef.current) return;
+
+    const maskCanvas = maskCanvasRef.current;
+    const srcCanvas = sourceCanvasRef.current;
+    const srcCtx = srcCanvas.getContext('2d');
+    const maskCtx = maskCanvas.getContext('2d');
+    if (!srcCtx || !maskCtx) return;
+
+    const w = loadedImage.width;
+    const h = loadedImage.height;
+
+    const startX = Math.round(imgX);
+    const startY = Math.round(imgY);
+    if (startX < 0 || startX >= w || startY < 0 || startY >= h) return;
+
+    const srcData = srcCtx.getImageData(0, 0, w, h);
+    const maskData = maskCtx.getImageData(0, 0, w, h);
+    const s = srcData.data;
+    const m = maskData.data;
+
+    const idx0 = (startY * w + startX) * 4;
+    const cr = s[idx0];
+    const cg = s[idx0 + 1];
+    const cb = s[idx0 + 2];
+
+    const tolerance = 50; // similar to TOLERANCE in floodfill-03.py
+    const tol2 = tolerance * tolerance;
+
+    const visited = new Uint8Array(w * h);
+    const queue: number[] = [];
+
+    const push = (qx: number, qy: number) => {
+      if (qx < 0 || qx >= w || qy < 0 || qy >= h) return;
+      const qIndex = qy * w + qx;
+      if (visited[qIndex]) return;
+      visited[qIndex] = 1;
+      queue.push(qx, qy);
+    };
+
+    push(startX, startY);
+
+    while (queue.length) {
+      const qy = queue.pop()!;
+      const qx = queue.pop()!;
+      const idx = (qy * w + qx) * 4;
+
+      const r = s[idx];
+      const g = s[idx + 1];
+      const b = s[idx + 2];
+      const dr = r - cr;
+      const dg = g - cg;
+      const db = b - cb;
+      const dist2 = dr * dr + dg * dg + db * db;
+      if (dist2 > tol2) {
+        continue;
+      }
+
+      // Add to mask: solid red
+      m[idx] = 255;
+      m[idx + 1] = 0;
+      m[idx + 2] = 0;
+      m[idx + 3] = 255;
+
+      // 4-connected neighbors
+      push(qx + 1, qy);
+      push(qx - 1, qy);
+      push(qx, qy + 1);
+      push(qx, qy - 1);
+    }
+
+    maskCtx.putImageData(maskData, 0, 0);
+  }, [loadedImage]);
+
   // (renderCanvas is declared above, before it is first used)
 
   // Event handlers
@@ -306,7 +381,7 @@ const DrawingCanvas = () => {
       return;
     }
 
-    // Left mouse button for quick select / deselect
+    // Left mouse button for quick select / flood fill / deselect
     if (e.button === 0) {
       const imgPoint = screenToImage(x, y);
       if (
@@ -318,11 +393,20 @@ const DrawingCanvas = () => {
         const snapshot = maskCtx.getImageData(0, 0, loadedImage.width, loadedImage.height);
         undoStack.current.push(snapshot);
         redoStack.current = [];
-        setIsDrawing(true);
-        applyBrush(imgPoint.x, imgPoint.y, activeTool === 'add');
+        
+        if (activeTool === 'flood') {
+          // Single-click flood fill (no drag)
+          applyFloodFill(imgPoint.x, imgPoint.y);
+          setIsDrawing(false);
+          renderCanvas();
+        } else {
+          // Quick select / deselect with drag
+          setIsDrawing(true);
+          applyBrush(imgPoint.x, imgPoint.y, activeTool === 'add');
+        }
       }
     }
-  }, [loadedImage, screenToImage, activeTool, renderCanvas, applyBrush]);
+  }, [loadedImage, screenToImage, activeTool, renderCanvas, applyBrush, applyFloodFill]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!loadedImage) return;
@@ -584,7 +668,7 @@ const DrawingCanvas = () => {
           {/* Tool Selection */}
           <div className="mb-8">
             <h3 className="text-lg font-semibold text-foreground mb-4">Tools</h3>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <Button
                 variant={activeTool === 'add' ? 'default' : 'outline'}
                 onClick={() => setActiveTool('add')}
@@ -600,6 +684,14 @@ const DrawingCanvas = () => {
               >
                 <Eraser size={24} />
                 <span className="text-sm">Quick Deselect</span>
+              </Button>
+              <Button
+                variant={activeTool === 'flood' ? 'default' : 'outline'}
+                onClick={() => setActiveTool('flood')}
+                className="h-16 flex flex-col gap-2"
+              >
+                <Droplet size={24} />
+                <span className="text-sm">Flood Fill</span>
               </Button>
             </div>
           </div>
@@ -683,7 +775,7 @@ const DrawingCanvas = () => {
               onPointerLeave={handlePointerUp}
               onWheel={handleWheel}
               style={{ 
-                cursor: activeTool === 'add' || activeTool === 'subtract' ? 'crosshair' : 'grab',
+                cursor: activeTool === 'add' || activeTool === 'subtract' || activeTool === 'flood' ? 'crosshair' : 'grab',
                 touchAction: 'none'
               }}
               onContextMenu={(e) => e.preventDefault()}
