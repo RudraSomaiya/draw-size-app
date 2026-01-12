@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Pencil, Eraser, Undo, Redo, Trash2, ArrowRight, ArrowLeft, RotateCcw, Droplet, Plus, Square, Circle, ChevronLeft, ChevronRight } from "lucide-react";
+import { Pencil, Eraser, Undo, Redo, Trash2, ArrowRight, ArrowLeft, RotateCcw, Droplet, Plus, Square, Circle, ChevronLeft, ChevronRight, Shapes, X } from "lucide-react";
 
 // Transform matrix for zoom/pan operations (image space -> screen space)
 type TransformMatrix = {
@@ -23,7 +23,7 @@ type ImageRect = {
   height: number;
 };
 
-type DeselectShape = "rect" | "circle";
+type DeselectShape = "rect" | "circle" | "irregular";
 
 type DeselectItem = {
   id: string;
@@ -33,6 +33,7 @@ type DeselectItem = {
   breadth: number; // for rectangles: breadth
   diameter: number; // for circles
   unit: "m" | "ft";
+  area?: number; // for irregular shapes: area value
 };
 
 const DrawingCanvas = () => {
@@ -65,6 +66,8 @@ const DrawingCanvas = () => {
   const [deselectItems, setDeselectItems] = useState<DeselectItem[]>([]);
   const [sidebarWidth] = useState(320);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [floodTolerance, setFloodTolerance] = useState(50);
+  const previewHideTimeoutRef = useRef<number | null>(null);
 
   const imageData = location.state?.imageData;
   const originalImage = location.state?.originalImage;
@@ -220,12 +223,37 @@ const DrawingCanvas = () => {
     } catch {}
   }, [imageId, dims]);
 
-  // Restore deselection items when coming back from summary
+  // Restore deselection items when coming back from summary or from localStorage
   useEffect(() => {
-    if (restoredDeselectItems && restoredDeselectItems.length > 0) {
+    // 1) Prefer items passed via navigation state
+    if (restoredDeselectItems) {
       setDeselectItems(restoredDeselectItems);
+      if (imageId) {
+        try {
+          localStorage.setItem(`deselect:${imageId}`, JSON.stringify(restoredDeselectItems));
+        } catch {}
+      }
+      return;
     }
-  }, [restoredDeselectItems]);
+
+    // 2) Otherwise, try to load any saved items for this imageId
+    if (!imageId) return;
+    try {
+      const raw = localStorage.getItem(`deselect:${imageId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as DeselectItem[];
+        setDeselectItems(parsed);
+      }
+    } catch {}
+  }, [restoredDeselectItems, imageId]);
+
+  // Persist deselection items whenever they change
+  useEffect(() => {
+    if (!imageId) return;
+    try {
+      localStorage.setItem(`deselect:${imageId}`, JSON.stringify(deselectItems));
+    } catch {}
+  }, [imageId, deselectItems]);
 
   const handleAddDeselectItem = () => {
     setDeselectItems(prev => [
@@ -362,8 +390,7 @@ const DrawingCanvas = () => {
     const cg = s[idx0 + 1];
     const cb = s[idx0 + 2];
 
-    const tolerance = 50; // similar to TOLERANCE in floodfill-03.py
-    const tol2 = tolerance * tolerance;
+    const tol2 = floodTolerance * floodTolerance;
 
     const visited = new Uint8Array(w * h);
     const queue: number[] = [];
@@ -408,7 +435,7 @@ const DrawingCanvas = () => {
     }
 
     maskCtx.putImageData(maskData, 0, 0);
-  }, [loadedImage]);
+  }, [loadedImage, floodTolerance]);
 
   // (renderCanvas is declared above, before it is first used)
 
@@ -783,17 +810,41 @@ const DrawingCanvas = () => {
 
                   {/* Brush Size */}
                   <div>
-                    <h3 className="text-lg font-semibold text-foreground mb-4">Brush Size</h3>
-                    <div className="space-y-2">
-                      <Slider
-                        value={[brushSize]}
-                        onValueChange={(v) => setBrushSize(v[0] || brushSize)}
-                        min={5}
-                        max={100}
-                        step={1}
-                      />
-                      <div className="text-sm text-text-soft">{brushSize.toFixed(0)} px</div>
-                    </div>
+                    {activeTool === 'flood' ? (
+                      <>
+                        <h3 className="text-lg font-semibold text-foreground mb-4">Tolerance</h3>
+                        <div className="space-y-2">
+                          <Slider
+                            value={[floodTolerance]}
+                            onValueChange={(v) => setFloodTolerance(v[0] || floodTolerance)}
+                            min={0}
+                            max={120}
+                            step={1}
+                          />
+                          <div className="text-sm text-text-soft">{floodTolerance.toFixed(0)}</div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <h3 className="text-lg font-semibold text-foreground mb-4">Brush Size</h3>
+                        <div className="space-y-2">
+                          <Slider
+                            value={[brushSize]}
+                            onValueChange={(v) => {
+                              const val = v[0] || brushSize;
+                              setBrushSize(val);
+                              setShowBrushPreview(true);
+                              if (previewHideTimeoutRef.current) window.clearTimeout(previewHideTimeoutRef.current);
+                              previewHideTimeoutRef.current = window.setTimeout(() => setShowBrushPreview(false), 800);
+                            }}
+                            min={5}
+                            max={100}
+                            step={1}
+                          />
+                          <div className="text-sm text-text-soft">{brushSize.toFixed(0)} px</div>
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* Action Buttons */}
@@ -857,8 +908,11 @@ const DrawingCanvas = () => {
                     {deselectItems.map((item) => (
                       <div
                         key={item.id}
-                        className="rounded-xl border border-border bg-surface-soft p-3 space-y-3"
+                        className="rounded-xl border border-border bg-surface-soft p-3 space-y-3 relative"
                       >
+                        <Button size="icon" variant="ghost" className="absolute top-2 right-2 h-6 w-6" onClick={() => setDeselectItems(prev => prev.filter(d => d.id !== item.id))}>
+                          <X size={14} />
+                        </Button>
                         {/* First row: Shape, Count, Unit */}
                         <div className="grid grid-cols-3 gap-2 items-end">
                           <div className="space-y-1">
@@ -873,8 +927,10 @@ const DrawingCanvas = () => {
                                 <SelectValue>
                                   {item.shape === 'circle' ? (
                                     <Circle className="w-3 h-3" />
-                                  ) : (
+                                  ) : item.shape === 'rect' ? (
                                     <Square className="w-3 h-3" />
+                                  ) : (
+                                    <Shapes className="w-3 h-3" />
                                   )}
                                 </SelectValue>
                               </SelectTrigger>
@@ -889,6 +945,12 @@ const DrawingCanvas = () => {
                                   <div className="flex items-center gap-2">
                                     <Circle className="w-3 h-3" />
                                     <span className="text-xs">Circle</span>
+                                  </div>
+                                </SelectItem>
+                                <SelectItem value="irregular">
+                                  <div className="flex items-center gap-2">
+                                    <Shapes className="w-3 h-3" />
+                                    <span className="text-xs">Irregular</span>
                                   </div>
                                 </SelectItem>
                               </SelectContent>
@@ -918,8 +980,17 @@ const DrawingCanvas = () => {
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="m">meters</SelectItem>
-                                <SelectItem value="ft">feet</SelectItem>
+                                {item.shape === 'irregular' ? (
+                                  <>
+                                    <SelectItem value="m">sq. meters</SelectItem>
+                                    <SelectItem value="ft">sq. feet</SelectItem>
+                                  </>
+                                ) : (
+                                  <>
+                                    <SelectItem value="m">meters</SelectItem>
+                                    <SelectItem value="ft">feet</SelectItem>
+                                  </>
+                                )}
                               </SelectContent>
                             </Select>
                           </div>
@@ -927,41 +998,58 @@ const DrawingCanvas = () => {
 
                         {/* Second row: Length/Breadth or Diameter */}
                         <div className="grid grid-cols-2 gap-2 items-end">
-                          <div className="space-y-1">
-                            <Label className="text-xs text-text-soft">
-                              {item.shape === 'circle' ? 'Diameter' : 'Length'}
-                            </Label>
-                            <Input
-                              type="text"
-                              className="h-9 text-xs"
-                              value={
-                                item.shape === 'circle'
-                                  ? (Number.isFinite(item.diameter) ? item.diameter : "")
-                                  : (Number.isFinite(item.length) ? item.length : "")
-                              }
-                              onChange={(e) => {
-                                const num = Number(e.target.value);
-                                if (item.shape === 'circle') {
-                                  updateDeselectItem(item.id, 'diameter', num);
-                                } else {
-                                  updateDeselectItem(item.id, 'length', num);
-                                }
-                              }}
-                            />
-                          </div>
-                          {item.shape === 'rect' && (
-                            <div className="space-y-1">
-                              <Label className="text-xs text-text-soft">Breadth</Label>
+                          {item.shape === 'irregular' ? (
+                            <div className="space-y-1 col-span-2">
+                              <Label className="text-xs text-text-soft">Area</Label>
                               <Input
                                 type="text"
                                 className="h-9 text-xs"
-                                value={Number.isFinite(item.breadth) ? item.breadth : ""}
+                                value={Number.isFinite(item.area as number) ? item.area : ""}
                                 onChange={(e) => {
                                   const num = Number(e.target.value);
-                                  updateDeselectItem(item.id, 'breadth', num);
+                                  updateDeselectItem(item.id, 'area', num as unknown as DeselectItem['area']);
                                 }}
                               />
                             </div>
+                          ) : (
+                            <>
+                              <div className="space-y-1">
+                                <Label className="text-xs text-text-soft">
+                                  {item.shape === 'circle' ? 'Diameter' : 'Length'}
+                                </Label>
+                                <Input
+                                  type="text"
+                                  className="h-9 text-xs"
+                                  value={
+                                    item.shape === 'circle'
+                                      ? (Number.isFinite(item.diameter) ? item.diameter : "")
+                                      : (Number.isFinite(item.length) ? item.length : "")
+                                  }
+                                  onChange={(e) => {
+                                    const num = Number(e.target.value);
+                                    if (item.shape === 'circle') {
+                                      updateDeselectItem(item.id, 'diameter', num);
+                                    } else {
+                                      updateDeselectItem(item.id, 'length', num);
+                                    }
+                                  }}
+                                />
+                              </div>
+                              {item.shape === 'rect' && (
+                                <div className="space-y-1">
+                                  <Label className="text-xs text-text-soft">Breadth</Label>
+                                  <Input
+                                    type="text"
+                                    className="h-9 text-xs"
+                                    value={Number.isFinite(item.breadth) ? item.breadth : ""}
+                                    onChange={(e) => {
+                                      const num = Number(e.target.value);
+                                      updateDeselectItem(item.id, 'breadth', num);
+                                    }}
+                                  />
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       </div>
@@ -999,7 +1087,7 @@ const DrawingCanvas = () => {
         <div className="flex-1 relative">
           <div 
             ref={canvasWrapRef} 
-            className="w-full h-full bg-surface-soft overflow-hidden"
+            className="w-full h-full bg-surface-soft overflow-hidden relative"
           >
             <canvas
               ref={canvasRef}
@@ -1016,6 +1104,17 @@ const DrawingCanvas = () => {
               }}
               onContextMenu={(e) => e.preventDefault()}
             />
+            {showBrushPreview && (activeTool === 'add' || activeTool === 'subtract') && (
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                <div
+                  className="rounded-full border border-primary/70"
+                  style={{
+                    width: Math.max(5, brushSize * transform.scale),
+                    height: Math.max(5, brushSize * transform.scale),
+                  }}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Ruler } from "lucide-react";
 
-type DeselectShape = "rect" | "circle";
+type DeselectShape = "rect" | "circle" | "irregular";
 
 type DeselectItem = {
   id: string;
@@ -13,6 +13,7 @@ type DeselectItem = {
   breadth: number;
   diameter: number;
   unit: "m" | "ft";
+  area?: number;
 };
 
 const Dimensions = () => {
@@ -43,17 +44,30 @@ const Dimensions = () => {
         const count = item.count || 0;
         if (count <= 0) return sum;
 
-        // Convert linear dimensions to the same unit as the main dimensions
-        const lengthInUnit = convertToBaseUnit(item.length || 0, item.unit, unit);
-        const breadthInUnit = convertToBaseUnit(item.breadth || 0, item.unit, unit);
-        const diameterInUnit = convertToBaseUnit(item.diameter || 0, item.unit, unit);
-
         let areaInUnit = 0;
-        if (item.shape === "rect") {
-          areaInUnit = Math.max(0, lengthInUnit) * Math.max(0, breadthInUnit);
+
+        if (item.shape === "irregular") {
+          // Direct area entry; convert square units if needed
+          const a = Math.max(0, item.area || 0);
+          if (item.unit === unit) {
+            areaInUnit = a;
+          } else {
+            const factor = 0.3048; // linear ft->m
+            const areaFactor = item.unit === "ft" && unit === "m" ? factor * factor : 1 / (factor * factor);
+            areaInUnit = a * areaFactor;
+          }
         } else {
-          const r = Math.max(0, diameterInUnit / 2);
-          areaInUnit = Math.PI * r * r;
+          // Convert linear dimensions to the same unit as the main dimensions
+          const lengthInUnit = convertToBaseUnit(item.length || 0, item.unit, unit);
+          const breadthInUnit = convertToBaseUnit(item.breadth || 0, item.unit, unit);
+          const diameterInUnit = convertToBaseUnit(item.diameter || 0, item.unit, unit);
+
+          if (item.shape === "rect") {
+            areaInUnit = Math.max(0, lengthInUnit) * Math.max(0, breadthInUnit);
+          } else {
+            const r = Math.max(0, diameterInUnit / 2);
+            areaInUnit = Math.PI * r * r;
+          }
         }
 
         return sum + count * areaInUnit;
