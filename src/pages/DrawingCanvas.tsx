@@ -760,7 +760,7 @@ const DrawingCanvas = () => {
                         className="h-16 flex flex-col gap-2"
                       >
                         <Pencil size={24} />
-                        <span className="text-sm">Quick Select</span>
+                        <span className="text-sm">Draw</span>
                       </Button>
                       <Button
                         variant={activeTool === 'subtract' ? 'default' : 'outline'}
@@ -768,7 +768,7 @@ const DrawingCanvas = () => {
                         className="h-16 flex flex-col gap-2"
                       >
                         <Eraser size={24} />
-                        <span className="text-sm">Quick Deselect</span>
+                        <span className="text-sm">Erase</span>
                       </Button>
                       <Button
                         variant={activeTool === 'flood' ? 'default' : 'outline'}
@@ -776,7 +776,7 @@ const DrawingCanvas = () => {
                         className="h-16 flex flex-col gap-2"
                       >
                         <Droplet size={24} />
-                        <span className="text-sm">Flood Fill</span>
+                        <span className="text-sm">Fill</span>
                       </Button>
                     </div>
                   </div>
