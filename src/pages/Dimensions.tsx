@@ -81,6 +81,9 @@ const Dimensions = () => {
 
   // Final cemented area (sq meters/feet) is the drawn mask percentage of usable area
   const cementedArea = hasRealDimensions ? (usableArea * (maskCoverage / 100)) : 0;
+  const cementedPercent = hasRealDimensions && totalArea > 0
+    ? (cementedArea / totalArea) * 100
+    : maskCoverage;
 
   if (hasRealDimensions) {
     // Debug logging to verify deselection & usable area math
@@ -92,6 +95,7 @@ const Dimensions = () => {
       effectiveDeselectArea,
       usableArea,
       cementedArea,
+      cementedPercent,
       deselectItems,
     });
   }
@@ -219,7 +223,7 @@ const Dimensions = () => {
                 <div className="space-y-2 mt-4">
                   <p className="text-xs font-medium text-text-soft uppercase">Cemented Area</p>
                   <p className="text-3xl font-extrabold text-primary">
-                    {maskCoverage.toFixed(1)}%
+                    {cementedPercent.toFixed(1)}%
                   </p>
                   <p className="text-sm text-primary/80">
                     ({cementedArea.toFixed(2)} {unit}² after subtracting openings)
