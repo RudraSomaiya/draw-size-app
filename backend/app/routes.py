@@ -178,6 +178,36 @@ async def get_project_image(
     return image
 
 
+@router.patch("/projects/{project_id}/images/{image_id}", response_model=schemas.ProjectImageRead)
+async def update_project_image(
+    project_id: UUID,
+    image_id: UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    result = await db.execute(
+        select(models.ProjectImage)
+        .join(models.Project)
+        .where(
+            models.ProjectImage.id == image_id,
+            models.ProjectImage.project_id == project_id,
+            models.Project.user_id == current_user.id,
+        )
+    )
+    image = result.scalar_one_or_none()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    new_name = payload.get("original_filename")
+    if new_name:
+        image.original_filename = new_name
+
+    await db.commit()
+    await db.refresh(image)
+    return image
+
+
 @router.get("/projects/{project_id}/images/{image_id}/original")
 async def get_project_image_original(
     project_id: UUID,
@@ -211,6 +241,85 @@ async def get_project_image_original(
         "width": image.width_px,
         "height": image.height_px,
     }
+
+
+@router.get("/projects/{project_id}/images/{image_id}/thumbnail")
+async def get_project_image_thumbnail(
+    project_id: UUID,
+    image_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    result = await db.execute(
+        select(models.ProjectImage)
+        .join(models.Project)
+        .where(
+            models.ProjectImage.id == image_id,
+            models.ProjectImage.project_id == project_id,
+            models.Project.user_id == current_user.id,
+        )
+    )
+    image = result.scalar_one_or_none()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Prefer transformed image if available, otherwise original
+    src_path = image.storage_transformed_path or image.storage_original_path
+    img = cv2.imread(src_path)
+    if img is None:
+        raise HTTPException(status_code=500, detail="Stored image could not be read")
+
+    # Resize to a small thumbnail while preserving aspect ratio
+    thumb_height = 180
+    h, w = img.shape[:2]
+    scale = thumb_height / float(h)
+    thumb_size = (int(w * scale), thumb_height)
+    thumb = cv2.resize(img, thumb_size, interpolation=cv2.INTER_AREA)
+
+    _, buffer = cv2.imencode(".jpg", thumb)
+    img_base64 = base64.b64encode(buffer).decode("utf-8")
+
+    return {
+        "image_id": str(image.id),
+        "image_data": f"data:image/jpeg;base64,{img_base64}",
+        "width": thumb_size[0],
+        "height": thumb_size[1],
+    }
+
+
+@router.delete("/projects/{project_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project_image(
+    project_id: UUID,
+    image_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    result = await db.execute(
+        select(models.ProjectImage)
+        .join(models.Project)
+        .where(
+            models.ProjectImage.id == image_id,
+            models.ProjectImage.project_id == project_id,
+            models.Project.user_id == current_user.id,
+        )
+    )
+    image = result.scalar_one_or_none()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Best-effort file cleanup
+    for path_str in [image.storage_original_path, image.storage_transformed_path]:
+        if path_str:
+            try:
+                p = Path(path_str)
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                pass
+
+    await db.delete(image)
+    await db.commit()
+    return JSONResponse(status_code=status.HTTP_204_NO_CONTENT, content=None)
 
 
 @router.get("/projects/{project_id}/images/{image_id}/next", response_model=schemas.ProjectImageRead)

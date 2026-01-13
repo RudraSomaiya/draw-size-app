@@ -9,6 +9,7 @@ interface Project {
   id: string;
   name: string;
   description?: string | null;
+  created_at: string;
 }
 
 const Projects = () => {
@@ -101,14 +102,17 @@ const Projects = () => {
               <div>
                 <h2 className="text-lg font-semibold text-foreground mb-1">{project.name}</h2>
                 {project.description && (
-                  <p className="text-sm text-text-soft mb-2">{project.description}</p>
+                  <p className="text-sm text-text-soft mb-1">{project.description}</p>
                 )}
+                <p className="text-xs text-text-soft">
+                  Created on {new Date(project.created_at).toLocaleDateString()}
+                </p>
               </div>
               <div className="flex justify-between items-center mt-4">
                 <Button variant="outline" size="sm" asChild>
                   <Link to={`/projects/${project.id}`}>Open</Link>
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => handleDelete(project.id)}>
+                <Button variant="destructive" size="sm" onClick={() => handleDelete(project.id)}>
                   Delete
                 </Button>
               </div>

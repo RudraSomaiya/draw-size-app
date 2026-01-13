@@ -16,6 +16,7 @@ interface ProjectImage {
   original_filename: string;
   cemented_area?: number | null;
   cemented_percent?: number | null;
+  status?: string;
 }
 
 const ProjectDetail = () => {
@@ -56,40 +57,78 @@ const ProjectDetail = () => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const file = files[0];
-    if (!file.type.startsWith("image/")) return;
+    const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+    const token = localStorage.getItem("access_token") || "";
 
     try {
       setUploading(true);
-      const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch(`${apiBase}/projects/${projectId}/images/upload`, {
-        method: "POST",
-        body: form,
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
-        },
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Upload failed (${res.status})`);
+      const uploaded: ProjectImage[] = [];
+
+      for (const file of Array.from(files)) {
+        if (!file.type.startsWith("image/")) continue;
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch(`${apiBase}/projects/${projectId}/images/upload`, {
+          method: "POST",
+          body: form,
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `Upload failed (${res.status})`);
+        }
+        const data = await res.json();
+        uploaded.push(data);
       }
-      const data = await res.json();
-      setImages((prev) => [data, ...prev]);
-      navigate("/corners", {
-        state: {
-          projectId,
-          imageId: data.id,
-          imageData: data.image_data,
-        },
-      });
+
+      if (uploaded.length > 0) {
+        setImages((prev) => [...uploaded, ...prev]);
+      }
     } catch (err: any) {
       console.error(err);
-      alert(err?.message || "Failed to upload image");
+      alert(err?.message || "Failed to upload images");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleOpenImage = (img: ProjectImage) => {
+    navigate("/corners", {
+      state: {
+        projectId,
+        imageId: img.id,
+      },
+    });
+  };
+
+  const handleDeleteImage = async (img: ProjectImage) => {
+    if (!projectId) return;
+    if (!window.confirm("Delete this image? This cannot be undone.")) return;
+    try {
+      await apiFetch(`/projects/${projectId}/images/${img.id}`, { method: "DELETE" });
+      setImages((prev) => prev.filter((i) => i.id !== img.id));
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || "Failed to delete image");
+    }
+  };
+
+  const handleRenameImage = async (img: ProjectImage, newName: string) => {
+    if (!projectId) return;
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === img.original_filename) return;
+    try {
+      const updated = await apiFetch(`/projects/${projectId}/images/${img.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ original_filename: trimmed }),
+      });
+      setImages((prev) => prev.map((i) => (i.id === img.id ? { ...i, ...updated } : i)));
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || "Failed to rename image");
     }
   };
 
@@ -126,6 +165,7 @@ const ProjectDetail = () => {
             ref={fileInputRef}
             type="file"
             accept="image/*"
+            multiple
             className="hidden"
             onChange={handleFileChange}
           />
@@ -136,31 +176,34 @@ const ProjectDetail = () => {
           {images.length === 0 ? (
             <p className="text-sm text-text-soft">No images yet. Upload one to begin.</p>
           ) : (
-            <div className="space-y-3">
+            <div className="grid gap-4 md:grid-cols-2">
               {images.map((img) => (
-                <div key={img.id} className="flex items-center justify-between text-sm">
+                <div key={img.id} className="border border-border rounded-lg p-3 flex flex-col justify-between bg-surface-soft">
                   <div>
-                    <p className="font-medium text-foreground">{img.original_filename}</p>
+                    <p className="font-medium text-foreground mb-1">
+                      <input
+                        className="bg-transparent border-b border-transparent focus:border-primary outline-none text-sm w-full"
+                        defaultValue={img.original_filename}
+                        onBlur={(e) => handleRenameImage(img, e.target.value)}
+                      />
+                    </p>
                     {img.cemented_percent != null && (
-                      <p className="text-xs text-text-soft">
+                      <p className="text-xs text-text-soft mb-1">
                         Cemented: {img.cemented_percent.toFixed(1)}%
                       </p>
                     )}
+                    {img.status && (
+                      <p className="text-xs text-text-soft capitalize">Status: {img.status}</p>
+                    )}
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      navigate("/corners", {
-                        state: {
-                          projectId,
-                          imageId: img.id,
-                        },
-                      })
-                    }
-                  >
-                    Continue
-                  </Button>
+                  <div className="flex justify-between items-center mt-3">
+                    <Button variant="outline" size="sm" onClick={() => handleOpenImage(img)}>
+                      Open
+                    </Button>
+                    <Button variant="destructive" size="sm" onClick={() => handleDeleteImage(img)}>
+                      Delete
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

@@ -322,7 +322,10 @@ const Dimensions = () => {
                 </div>
 
                 {projectId && imageId && (
-                  <div className="mt-6 flex justify-end">
+                  <div className="mt-6 flex justify-between">
+                    <Button variant="outline" onClick={() => navigate(`/projects/${projectId}`)}>
+                      Back to projects
+                    </Button>
                     <Button variant="outline" onClick={handleNextImage}>
                       Next image in project
                     </Button>
