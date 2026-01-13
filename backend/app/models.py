@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -21,7 +22,7 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = {"schema": "data"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     email = Column(String, unique=True, nullable=False, index=True)
     hashed_password = Column(Text, nullable=False)
     full_name = Column(Text, nullable=True)
@@ -37,7 +38,7 @@ class Project(Base):
     __tablename__ = "projects"
     __table_args__ = {"schema": "data"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("data.users.id", ondelete="CASCADE"), nullable=False)
     name = Column(Text, nullable=False)
     description = Column(Text, nullable=True)
@@ -53,7 +54,7 @@ class ProjectImage(Base):
     __tablename__ = "project_images"
     __table_args__ = {"schema": "data"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("data.projects.id", ondelete="CASCADE"), nullable=False)
 
     original_filename = Column(Text, nullable=False)
@@ -92,7 +93,7 @@ class ImageDeselection(Base):
     __tablename__ = "image_deselections"
     __table_args__ = {"schema": "data"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     image_id = Column(UUID(as_uuid=True), ForeignKey("data.project_images.id", ondelete="CASCADE"), nullable=False)
 
     shape = Column(Enum("rect", "circle", "irregular", name="deselect_shape", schema="data"), nullable=False)

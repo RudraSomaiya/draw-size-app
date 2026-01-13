@@ -166,8 +166,15 @@ const CornerSelection: React.FC = () => {
       const transformPath = projectId
         ? `/projects/${projectId}/images/${imageId}/transform`
         : "/transform";
+      const headers: HeadersInit = projectId
+        ? { Authorization: `Bearer ${localStorage.getItem("access_token") || ""}` }
+        : {};
 
-      const res = await fetch(`${apiBase}${transformPath}`, { method: "POST", body: form });
+      const res = await fetch(`${apiBase}${transformPath}`, {
+        method: "POST",
+        body: form,
+        headers,
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Transform failed (${res.status})`);
