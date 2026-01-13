@@ -1,26 +1,43 @@
+import os
+import json
+import base64
+import uuid
+from pathlib import Path
+from typing import List
+import io
+
+import cv2
+import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import cv2
-import numpy as np
+from dotenv import load_dotenv
 from PIL import Image
-import io
-import base64
-from typing import List
-import uuid
-from pathlib import Path
-import json
+
+from .routes import router as api_router
+
+
+load_dotenv()
+
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "8000"))
+CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080"
+).split(",")
+
 
 app = FastAPI(title="Draw Size API", version="1.0.0")
 
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(api_router)
 
 # Storage directory
 STORAGE_DIR = Path("storage")
