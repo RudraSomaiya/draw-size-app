@@ -10,6 +10,7 @@ interface Project {
   name: string;
   description?: string | null;
   created_at: string;
+  thumbnail?: string;
 }
 
 const Projects = () => {
@@ -28,7 +29,37 @@ const Projects = () => {
     const load = async () => {
       try {
         const data = await apiFetch("/projects");
-        setProjects(data || []);
+        const baseProjects: Project[] = data || [];
+        setProjects(baseProjects);
+
+        // Load thumbnails separately to avoid changing backend list schema
+        const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+        const loaded: Project[] = [];
+        await Promise.all(
+          baseProjects.map(async (p) => {
+            try {
+              const res = await fetch(`${apiBase}/projects/${p.id}/thumbnail`, {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              });
+              if (!res.ok) return;
+              const thumb = await res.json();
+              loaded.push({ ...p, thumbnail: thumb.image_data });
+            } catch {
+              // ignore thumbnail errors
+            }
+          })
+        );
+
+        if (loaded.length > 0) {
+          setProjects((prev) =>
+            prev.map((p) => {
+              const withThumb = loaded.find((lp) => lp.id === p.id);
+              return withThumb ? withThumb : p;
+            })
+          );
+        }
       } catch (err: any) {
         console.error(err);
         navigate("/login");
@@ -100,6 +131,15 @@ const Projects = () => {
           {projects.map((project) => (
             <Card key={project.id} className="p-4 flex flex-col justify-between">
               <div>
+                {project.thumbnail && (
+                  <div className="mb-3 overflow-hidden rounded-md border border-border bg-black/5">
+                    <img
+                      src={project.thumbnail}
+                      alt={project.name}
+                      className="w-full h-32 object-cover"
+                    />
+                  </div>
+                )}
                 <h2 className="text-lg font-semibold text-foreground mb-1">{project.name}</h2>
                 {project.description && (
                   <p className="text-sm text-text-soft mb-1">{project.description}</p>

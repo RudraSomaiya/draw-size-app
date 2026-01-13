@@ -108,6 +108,56 @@ async def create_project(
     return project
 
 
+@router.get("/projects/{project_id}/thumbnail")
+async def get_project_thumbnail(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    # Ensure project belongs to user
+    project_q = await db.execute(
+        select(models.Project).where(
+            models.Project.id == project_id, models.Project.user_id == current_user.id
+        )
+    )
+    project = project_q.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Use the most recent image for the project as the thumbnail source
+    image_q = await db.execute(
+        select(models.ProjectImage)
+        .where(models.ProjectImage.project_id == project_id)
+        .order_by(models.ProjectImage.created_at.desc())
+    )
+    image = image_q.scalars().first()
+    if not image:
+        raise HTTPException(status_code=404, detail="No images for project")
+
+    # Prefer cemented image, then transformed, then original
+    src_path = image.cemented_image_path or image.storage_transformed_path or image.storage_original_path
+    img = cv2.imread(src_path)
+    if img is None:
+        raise HTTPException(status_code=500, detail="Stored image could not be read")
+
+    # Resize to a small thumbnail while preserving aspect ratio
+    thumb_height = 180
+    h, w = img.shape[:2]
+    scale = thumb_height / float(h)
+    thumb_size = (int(w * scale), thumb_height)
+    thumb = cv2.resize(img, thumb_size, interpolation=cv2.INTER_AREA)
+
+    _, buffer = cv2.imencode(".jpg", thumb)
+    img_base64 = base64.b64encode(buffer).decode("utf-8")
+
+    return {
+        "project_id": str(project.id),
+        "image_data": f"data:image/jpeg;base64,{img_base64}",
+        "width": thumb_size[0],
+        "height": thumb_size[1],
+    }
+
+
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: UUID,

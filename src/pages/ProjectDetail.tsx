@@ -24,6 +24,7 @@ interface ProjectImage {
   deselect_area?: number | null;
   effective_deselect_area?: number | null;
   usable_area?: number | null;
+  thumbnail?: string;
 }
 
 const ProjectDetail = () => {
@@ -46,7 +47,37 @@ const ProjectDetail = () => {
         }
         setProject(current);
         const imgs = await apiFetch(`/projects/${projectId}/images`);
-        setImages(imgs || []);
+        const baseImages: ProjectImage[] = imgs || [];
+        setImages(baseImages);
+
+        // Load thumbnails for each image
+        const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+        const token = localStorage.getItem("access_token") || "";
+        const withThumbs: ProjectImage[] = [];
+
+        await Promise.all(
+          baseImages.map(async (img: ProjectImage) => {
+            try {
+              const res = await fetch(`${apiBase}/projects/${projectId}/images/${img.id}/thumbnail`, {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              });
+              if (!res.ok) {
+                withThumbs.push(img);
+                return;
+              }
+              const thumb = await res.json();
+              withThumbs.push({ ...img, thumbnail: thumb.image_data });
+            } catch {
+              withThumbs.push(img);
+            }
+          })
+        );
+
+        if (withThumbs.length > 0) {
+          setImages(withThumbs);
+        }
       } catch (err: any) {
         console.error(err);
         navigate("/login");
@@ -91,7 +122,30 @@ const ProjectDetail = () => {
       }
 
       if (uploaded.length > 0) {
-        setImages((prev) => [...uploaded, ...prev]);
+        // Fetch thumbnails for newly uploaded images
+        const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+        const withThumbs: ProjectImage[] = [];
+        await Promise.all(
+          uploaded.map(async (img) => {
+            try {
+              const res = await fetch(`${apiBase}/projects/${projectId}/images/${img.id}/thumbnail`, {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              });
+              if (!res.ok) {
+                withThumbs.push(img);
+                return;
+              }
+              const thumb = await res.json();
+              withThumbs.push({ ...img, thumbnail: thumb.image_data });
+            } catch {
+              withThumbs.push(img);
+            }
+          })
+        );
+
+        setImages((prev) => [...withThumbs, ...prev]);
       }
     } catch (err: any) {
       console.error(err);
@@ -251,6 +305,15 @@ const ProjectDetail = () => {
               {images.map((img) => (
                 <div key={img.id} className="border border-border rounded-lg p-3 flex flex-col justify-between bg-surface-soft">
                   <div>
+                    {img.thumbnail && (
+                      <div className="mb-2 overflow-hidden rounded-md border border-border bg-black/5">
+                        <img
+                          src={img.thumbnail}
+                          alt={img.original_filename}
+                          className="w-full h-32 object-cover"
+                        />
+                      </div>
+                    )}
                     <p className="font-medium text-foreground mb-1">
                       <input
                         className="bg-transparent border-b border-transparent focus:border-primary outline-none text-sm w-full"
