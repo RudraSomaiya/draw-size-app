@@ -8,6 +8,10 @@ import CornerSelection from "./pages/CornerSelection";
 import DrawingCanvas from "./pages/DrawingCanvas";
 import Dimensions from "./pages/Dimensions";
 import NotFound from "./pages/NotFound";
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
+import Projects from "./pages/Projects";
+import ProjectDetail from "./pages/ProjectDetail";
 
 const queryClient = new QueryClient();
 
@@ -18,6 +22,10 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/projects" element={<Projects />} />
+          <Route path="/projects/:projectId" element={<ProjectDetail />} />
           <Route path="/" element={<ImageUpload />} />
           <Route path="/drawing" element={<DrawingCanvas />} />
           <Route path="/corners" element={<CornerSelection />} />

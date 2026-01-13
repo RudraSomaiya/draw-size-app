@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Ruler } from "lucide-react";
@@ -19,7 +21,7 @@ type DeselectItem = {
 const Dimensions = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { originalImage, annotatedImage, maskCoverage = 0, rects = [], imageId, realDimensions, orthographicImage, maskImage, deselectItems = [] as DeselectItem[] } = location.state || {};
+  const { originalImage, annotatedImage, maskCoverage = 0, rects = [], imageId, realDimensions, orthographicImage, maskImage, deselectItems = [] as DeselectItem[], projectId } = location.state || {};
 
   const realWidth = realDimensions?.width ?? 0;
   const realHeight = realDimensions?.height ?? 0;
@@ -100,6 +102,52 @@ const Dimensions = () => {
     });
   }
 
+  // Save analysis to backend when we have project/image context
+  useEffect(() => {
+    const saveAnalysis = async () => {
+      if (!projectId || !imageId || !hasRealDimensions) return;
+      try {
+        const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+        const token = localStorage.getItem("access_token") || "";
+        const body = {
+          mask_coverage_percent: maskCoverage,
+          deselect_area: deselectArea,
+          effective_deselect_area: effectiveDeselectArea,
+          usable_area: usableArea,
+          cemented_area: cementedArea,
+          cemented_percent: cementedPercent,
+          real_width: realWidth,
+          real_height: realHeight,
+          real_unit: unit,
+          deselections: deselectItems.map((item) => ({
+            shape: item.shape,
+            count: item.count,
+            length: item.length,
+            breadth: item.breadth,
+            diameter: item.diameter,
+            area: item.area,
+            unit: item.unit,
+          })),
+        };
+
+        await fetch(`${apiBase}/projects/${projectId}/images/${imageId}/analysis`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        });
+      } catch (err) {
+        // Swallow errors here; user still sees UI
+        // eslint-disable-next-line no-console
+        console.error("Failed to save analysis", err);
+      }
+    };
+
+    saveAnalysis();
+  }, [projectId, imageId, hasRealDimensions, maskCoverage, deselectArea, effectiveDeselectArea, usableArea, cementedArea, cementedPercent, realWidth, realHeight, unit, deselectItems]);
+
   const handleBack = () => {
     navigate('/drawing', { 
       state: { 
@@ -110,9 +158,52 @@ const Dimensions = () => {
         deselectItems,
         rects: rects,
         imageId,
-        realDimensions
+        realDimensions,
+        projectId,
       } 
     });
+  };
+
+  const handleNextImage = async () => {
+    if (!projectId || !imageId) return;
+    try {
+      const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+      const token = localStorage.getItem("access_token") || "";
+      const nextRes = await fetch(`${apiBase}/projects/${projectId}/images/${imageId}/next`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!nextRes.ok) {
+        const err = await nextRes.json().catch(() => ({}));
+        alert(err.detail || "No next image available");
+        return;
+      }
+      const nextImage = await nextRes.json();
+
+      const origRes = await fetch(`${apiBase}/projects/${projectId}/images/${nextImage.id}/original`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!origRes.ok) {
+        const err = await origRes.json().catch(() => ({}));
+        throw new Error(err.detail || `Failed to load next image (${origRes.status})`);
+      }
+      const origData = await origRes.json();
+
+      navigate('/corners', {
+        state: {
+          projectId,
+          imageId: nextImage.id,
+          imageData: origData.image_data,
+        },
+      });
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("Next image navigation failed", err);
+      alert(err?.message || "Failed to load next image");
+    }
   };
 
   if (!originalImage || !annotatedImage) {
@@ -229,6 +320,14 @@ const Dimensions = () => {
                     ({cementedArea.toFixed(2)} {unit}² after subtracting openings)
                   </p>
                 </div>
+
+                {projectId && imageId && (
+                  <div className="mt-6 flex justify-end">
+                    <Button variant="outline" onClick={handleNextImage}>
+                      Next image in project
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </Card>

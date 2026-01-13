@@ -69,6 +69,7 @@ const DrawingCanvas = () => {
   const [floodTolerance, setFloodTolerance] = useState(50);
   const previewHideTimeoutRef = useRef<number | null>(null);
 
+  const projectId: string | undefined = location.state?.projectId;
   const imageData = location.state?.imageData;
   const originalImage = location.state?.originalImage;
   const restoredMaskImage = location.state?.maskImage as string | undefined;
@@ -701,13 +702,18 @@ const DrawingCanvas = () => {
         maskImage,
         deselectItems,
         imageId,
-        realDimensions: dims
+        realDimensions: dims,
+        projectId,
       } 
     });
   };
 
   const handleBack = () => {
-    navigate('/');
+    if (projectId) {
+      navigate(`/projects/${projectId}`);
+    } else {
+      navigate('/');
+    }
   };
 
   if (!imageData) {

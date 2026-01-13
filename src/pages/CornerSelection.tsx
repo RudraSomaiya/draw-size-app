@@ -11,7 +11,11 @@ interface Point { x: number; y: number }
 const CornerSelection: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { imageId, imageData } = (location.state || {}) as { imageId?: string; imageData?: string };
+  const { projectId, imageId, imageData: initialImageData } = (location.state || {}) as {
+    projectId?: string;
+    imageId?: string;
+    imageData?: string;
+  };
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -22,12 +26,48 @@ const CornerSelection: React.FC = () => {
   const [imgNatural, setImgNatural] = useState<{w:number;h:number}>({ w: 0, h: 0 });
   const [submitting, setSubmitting] = useState(false);
   const [hoverPx, setHoverPx] = useState<{x:number;y:number}|null>(null);
+  const [imageData, setImageData] = useState<string | undefined>(initialImageData);
 
   useEffect(() => {
-    if (!imageId || !imageData) {
+    if (!imageId) {
       navigate("/");
+      return;
     }
-  }, [imageId, imageData, navigate]);
+
+    if (initialImageData) {
+      setImageData(initialImageData);
+      return;
+    }
+
+    // If we only have projectId + imageId, fetch the original image from backend
+    const fetchImage = async () => {
+      if (!projectId) return;
+      try {
+        const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+        const res = await fetch(
+          `${apiBase}/projects/${projectId}/images/${imageId}/original`,
+          {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+            },
+          }
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `Failed to load image (${res.status})`);
+        }
+        const data = await res.json();
+        setImageData(data.image_data);
+      } catch (e: any) {
+        console.error("Load image error:", e);
+        navigate("/projects");
+      }
+    };
+
+    if (projectId && !initialImageData) {
+      fetchImage();
+    }
+  }, [imageId, initialImageData, projectId, navigate]);
 
   const onImageLoad = () => {
     const el = imgRef.current;
@@ -123,15 +163,27 @@ const CornerSelection: React.FC = () => {
       form.append("height", String(parseFloat(realHeight)));
       form.append("width", String(parseFloat(realWidth)));
 
-      const res = await fetch(`${apiBase}/transform`, { method: "POST", body: form });
+      const transformPath = projectId
+        ? `/projects/${projectId}/images/${imageId}/transform`
+        : "/transform";
+
+      const res = await fetch(`${apiBase}${transformPath}`, { method: "POST", body: form });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Transform failed (${res.status})`);
       }
       const data = await res.json();
 
-      // Navigate to drawing with transformed image, original uploaded image, and imageId
-      navigate("/drawing", { state: { imageData: data.transformed_image, originalImage: imageData, realDimensions: data.real_dimensions, imageId } });
+      // Navigate to drawing with transformed image, original uploaded image, and ids
+      navigate("/drawing", {
+        state: {
+          projectId,
+          imageId,
+          imageData: data.transformed_image,
+          originalImage: imageData,
+          realDimensions: data.real_dimensions,
+        },
+      });
     } catch (e: any) {
       console.error("Transform error:", e);
       alert(e?.message || "Failed to transform image");
