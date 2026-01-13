@@ -287,6 +287,44 @@ async def get_project_image_thumbnail(
     }
 
 
+@router.get("/projects/{project_id}/images/{image_id}/cemented")
+async def get_project_image_cemented(
+    project_id: UUID,
+    image_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    result = await db.execute(
+        select(models.ProjectImage)
+        .join(models.Project)
+        .where(
+            models.ProjectImage.id == image_id,
+            models.ProjectImage.project_id == project_id,
+            models.Project.user_id == current_user.id,
+        )
+    )
+    image = result.scalar_one_or_none()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    src_path = image.cemented_image_path or image.storage_transformed_path or image.storage_original_path
+    img = cv2.imread(src_path)
+    if img is None:
+        raise HTTPException(status_code=500, detail="Stored image could not be read")
+
+    _, buffer = cv2.imencode(".jpg", img)
+    img_base64 = base64.b64encode(buffer).decode("utf-8")
+
+    h, w = img.shape[:2]
+
+    return {
+        "image_id": str(image.id),
+        "image_data": f"data:image/jpeg;base64,{img_base64}",
+        "width": w,
+        "height": h,
+    }
+
+
 @router.delete("/projects/{project_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project_image(
     project_id: UUID,
@@ -592,6 +630,23 @@ async def save_image_analysis(
                 unit=item.unit,
             )
             db.add(db_item)
+
+    # If a cemented image data URL is provided, persist it and store path
+    if analysis.cemented_image:
+        try:
+            header, b64data = analysis.cemented_image.split(",", 1)
+        except ValueError:
+            b64data = analysis.cemented_image
+        try:
+            raw = base64.b64decode(b64data)
+            cemented_name = f"{image_id}_cemented.jpg"
+            cemented_path = STORAGE_DIR / cemented_name
+            with open(cemented_path, "wb") as f:
+                f.write(raw)
+            db_image.cemented_image_path = str(cemented_path)
+        except Exception:
+            # Do not fail the whole request if cemented image saving fails
+            pass
 
     await db.commit()
     await db.refresh(db_image)

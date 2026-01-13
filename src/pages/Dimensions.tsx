@@ -21,7 +21,7 @@ type DeselectItem = {
 const Dimensions = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { originalImage, annotatedImage, maskCoverage = 0, rects = [], imageId, realDimensions, orthographicImage, maskImage, deselectItems = [] as DeselectItem[], projectId } = location.state || {};
+  const { originalImage, annotatedImage, maskCoverage = 0, rects = [], imageId, realDimensions, orthographicImage, maskImage, deselectItems = [] as DeselectItem[], projectId, precomputedAnalysis } = location.state || {};
 
   const realWidth = realDimensions?.width ?? 0;
   const realHeight = realDimensions?.height ?? 0;
@@ -32,7 +32,7 @@ const Dimensions = () => {
   const unitLabel = unit === "m" ? "meters" : "feet";
 
   const hasRealDimensions = realWidth > 0 && realHeight > 0;
-  const totalArea = hasRealDimensions ? realWidth * realHeight : 0;
+  const derivedTotalArea = hasRealDimensions ? realWidth * realHeight : 0;
 
   // Convert deselection linear dimensions to the same unit as realDimensions and subtract
   const convertToBaseUnit = (value: number, fromUnit: "m" | "ft", toUnit: "m" | "ft") => {
@@ -41,7 +41,7 @@ const Dimensions = () => {
     return fromUnit === "ft" && toUnit === "m" ? value * factor : value / factor;
   };
 
-  const deselectArea = hasRealDimensions
+  const computedDeselectArea = hasRealDimensions
     ? deselectItems.reduce((sum, item) => {
         const count = item.count || 0;
         if (count <= 0) return sum;
@@ -78,14 +78,16 @@ const Dimensions = () => {
 
   // Usable facade area after subtracting fixed openings (windows/doors).
   // Openings cannot exceed the total facade area, so clamp deselectArea.
-  const effectiveDeselectArea = hasRealDimensions ? Math.min(deselectArea, totalArea) : 0;
-  const usableArea = hasRealDimensions ? Math.max(0, totalArea - effectiveDeselectArea) : 0;
+  const deselectArea = precomputedAnalysis?.deselectArea ?? computedDeselectArea;
+  const totalArea = derivedTotalArea;
+  const effectiveDeselectArea = precomputedAnalysis?.effectiveDeselectArea ?? (hasRealDimensions ? Math.min(deselectArea, totalArea) : 0);
+  const usableArea = precomputedAnalysis?.usableArea ?? (hasRealDimensions ? Math.max(0, totalArea - effectiveDeselectArea) : 0);
 
   // Final cemented area (sq meters/feet) is the drawn mask percentage of usable area
-  const cementedArea = hasRealDimensions ? (usableArea * (maskCoverage / 100)) : 0;
-  const cementedPercent = hasRealDimensions && totalArea > 0
+  const cementedArea = precomputedAnalysis?.cementedArea ?? (hasRealDimensions ? (usableArea * (maskCoverage / 100)) : 0);
+  const cementedPercent = precomputedAnalysis?.cementedPercent ?? (hasRealDimensions && totalArea > 0
     ? (cementedArea / totalArea) * 100
-    : maskCoverage;
+    : maskCoverage);
 
   if (hasRealDimensions) {
     // Debug logging to verify deselection & usable area math
@@ -128,6 +130,8 @@ const Dimensions = () => {
             area: item.area,
             unit: item.unit,
           })),
+          // Persist the cemented image so processed images can be reopened directly in summary
+          cemented_image: annotatedImage,
         };
 
         await fetch(`${apiBase}/projects/${projectId}/images/${imageId}/analysis`, {
@@ -322,10 +326,15 @@ const Dimensions = () => {
                 </div>
 
                 {projectId && imageId && (
-                  <div className="mt-6 flex justify-between">
-                    <Button variant="outline" onClick={() => navigate(`/projects/${projectId}`)}>
-                      Back to projects
-                    </Button>
+                  <div className="mt-6 flex flex-wrap gap-3 justify-between">
+                    <div className="flex gap-3">
+                      <Button variant="outline" onClick={handleBack}>
+                        Process again
+                      </Button>
+                      <Button variant="outline" onClick={() => navigate(`/projects/${projectId}`)}>
+                        Back to projects
+                      </Button>
+                    </div>
                     <Button variant="outline" onClick={handleNextImage}>
                       Next image in project
                     </Button>

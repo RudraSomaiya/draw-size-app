@@ -74,9 +74,18 @@ class ProjectImageRead(ProjectImageBase):
     project_id: UUID
     width_px: int
     height_px: int
-    status: str
+    real_width: Optional[float] = None
+    real_height: Optional[float] = None
+    real_unit: Optional[str] = None
+    mask_coverage_percent: Optional[float] = None
+    deselect_area: Optional[float] = None
+    effective_deselect_area: Optional[float] = None
+    usable_area: Optional[float] = None
     cemented_area: Optional[float] = None
     cemented_percent: Optional[float] = None
+    sort_key_numeric: Optional[float] = None
+    status: str
+    error_message: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -125,4 +134,5 @@ class ImageAnalysisUpdate(BaseModel):
     real_height: Optional[float] = None
     real_unit: Optional[str] = None
     deselections: Optional[List[DeselectItemCreate]] = None
+    cemented_image: Optional[str] = None
 

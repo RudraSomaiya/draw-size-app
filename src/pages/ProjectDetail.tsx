@@ -17,6 +17,13 @@ interface ProjectImage {
   cemented_area?: number | null;
   cemented_percent?: number | null;
   status?: string;
+  real_width?: number | null;
+  real_height?: number | null;
+  real_unit?: string | null;
+  mask_coverage_percent?: number | null;
+  deselect_area?: number | null;
+  effective_deselect_area?: number | null;
+  usable_area?: number | null;
 }
 
 const ProjectDetail = () => {
@@ -95,7 +102,71 @@ const ProjectDetail = () => {
     }
   };
 
-  const handleOpenImage = (img: ProjectImage) => {
+  const handleOpenImage = async (img: ProjectImage) => {
+    if (!projectId) return;
+
+    // If image has already been processed, go straight to summary using stored analysis
+    if (img.status === "ready" && img.cemented_percent != null) {
+      try {
+        const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+        const token = localStorage.getItem("access_token") || "";
+
+        const [origRes, cementedRes] = await Promise.all([
+          fetch(`${apiBase}/projects/${projectId}/images/${img.id}/original`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${apiBase}/projects/${projectId}/images/${img.id}/cemented`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+
+        if (!origRes.ok) {
+          const err = await origRes.json().catch(() => ({}));
+          throw new Error(err.detail || `Failed to load original image (${origRes.status})`);
+        }
+        if (!cementedRes.ok) {
+          const err = await cementedRes.json().catch(() => ({}));
+          throw new Error(err.detail || `Failed to load cemented image (${cementedRes.status})`);
+        }
+
+        const orig = await origRes.json();
+        const cemented = await cementedRes.json();
+
+        const realWidth = img.real_width ?? 0;
+        const realHeight = img.real_height ?? 0;
+        const realUnit = img.real_unit ?? "m";
+
+        navigate("/dimensions", {
+          state: {
+            originalImage: orig.image_data,
+            annotatedImage: cemented.image_data,
+            maskCoverage: img.mask_coverage_percent ?? img.cemented_percent ?? 0,
+            imageId: img.id,
+            projectId,
+            realDimensions: {
+              width: realWidth,
+              height: realHeight,
+              unit: realUnit,
+            },
+            // Precomputed analysis from backend; Dimensions will display these directly
+            precomputedAnalysis: {
+              deselectArea: img.deselect_area ?? undefined,
+              effectiveDeselectArea: img.effective_deselect_area ?? undefined,
+              usableArea: img.usable_area ?? undefined,
+              cementedArea: img.cemented_area ?? undefined,
+              cementedPercent: img.cemented_percent ?? undefined,
+            },
+          },
+        });
+        return;
+      } catch (err: any) {
+        console.error("Failed to open processed image", err);
+        alert(err?.message || "Failed to open processed image");
+        // Fallback to normal flow below
+      }
+    }
+
+    // Default: go through corners flow
     navigate("/corners", {
       state: {
         projectId,

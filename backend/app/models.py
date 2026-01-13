@@ -79,6 +79,7 @@ class ProjectImage(Base):
 
     status = Column(String, nullable=False, default="new")
     error_message = Column(Text, nullable=True)
+    cemented_image_path = Column(Text, nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)

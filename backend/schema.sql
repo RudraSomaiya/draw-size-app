@@ -49,35 +49,38 @@ CREATE INDEX IF NOT EXISTS idx_projects_user_id_created_at ON projects (user_id,
 -- Each row represents one wall image in a project and holds both
 -- original + orthographic paths and latest analysis results.
 CREATE TABLE IF NOT EXISTS project_images (
-    id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id              uuid NOT NULL REFERENCES data.projects(id) ON DELETE CASCADE,
+    id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id               uuid NOT NULL REFERENCES data.projects(id) ON DELETE CASCADE,
 
-    original_filename       text NOT NULL,
-    storage_original_path   text NOT NULL,
+    original_filename        text NOT NULL,
+    storage_original_path    text NOT NULL,
     storage_transformed_path text,
 
-    width_px                integer NOT NULL,
-    height_px               integer NOT NULL,
+    width_px                 integer NOT NULL,
+    height_px                integer NOT NULL,
 
-    real_width              double precision,   -- in real_unit
-    real_height             double precision,
-    real_unit               text,               -- 'm' or 'ft'
+    real_width               double precision,   -- in real_unit
+    real_height              double precision,
+    real_unit                text,               -- 'm' or 'ft'
 
     -- Latest mask / coverage numbers from the webapp
-    mask_coverage_percent   double precision,   -- 0-100, on usable area
-    deselect_area           double precision,   -- same unit^2 as real_unit
-    effective_deselect_area double precision,   -- clamped to total facade area
-    usable_area             double precision,   -- total - effective_deselect_area
-    cemented_area           double precision,   -- usable * maskCoverage
-    cemented_percent        double precision,   -- cemented_area / totalArea * 100
+    mask_coverage_percent    double precision,   -- 0-100, on usable area
+    deselect_area            double precision,   -- same unit^2 as real_unit
+    effective_deselect_area  double precision,   -- clamped to total facade area
+    usable_area              double precision,   -- total - effective_deselect_area
+    cemented_area            double precision,   -- usable * maskCoverage
+    cemented_percent         double precision,   -- cemented_area / totalArea * 100
 
-    sort_key_numeric        double precision,   -- optional: cached numeric sort (e.g. cemented_area)
+    sort_key_numeric         double precision,   -- optional: cached numeric sort (e.g. cemented_area)
 
-    status                  text NOT NULL DEFAULT 'new', -- new|processing|ready|error
-    error_message           text,
+    status                   text NOT NULL DEFAULT 'new', -- new|processing|ready|error
+    error_message            text,
 
-    created_at              timestamptz NOT NULL DEFAULT now(),
-    updated_at              timestamptz NOT NULL DEFAULT now()
+    -- NEW: optional stored cemented image (orthographic + mask overlay)
+    cemented_image_path      text,
+
+    created_at               timestamptz NOT NULL DEFAULT now(),
+    updated_at               timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_images_project_id ON project_images (project_id);
