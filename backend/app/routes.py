@@ -426,30 +426,41 @@ async def get_next_image(
     if not project_q.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # For now, define order as created_at DESC, and "next" = previous in time
-    current_q = await db.execute(
-        select(models.ProjectImage).where(
-            models.ProjectImage.id == image_id,
-            models.ProjectImage.project_id == project_id,
-        )
-    )
-    current = current_q.scalar_one_or_none()
-    if not current:
-        raise HTTPException(status_code=404, detail="Image not found")
-
+    # Load all images for this project in a stable order
     result = await db.execute(
         select(models.ProjectImage)
-        .where(
-            models.ProjectImage.project_id == project_id,
-            models.ProjectImage.created_at < current.created_at,
-        )
-        .order_by(models.ProjectImage.created_at.desc())
+        .where(models.ProjectImage.project_id == project_id)
+        .order_by(models.ProjectImage.created_at.asc())
     )
-    next_image = result.scalars().first()
-    if not next_image:
-        raise HTTPException(status_code=404, detail="No next image")
+    images = result.scalars().all()
 
-    return next_image
+    if not images:
+        raise HTTPException(status_code=404, detail="No images in project")
+
+    # Find current image in sequence
+    current_index = None
+    for idx, img in enumerate(images):
+        if img.id == image_id:
+            current_index = idx
+            break
+    if current_index is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    def is_unprocessed(img: models.ProjectImage) -> bool:
+        # Treat anything that is not explicitly "ready" as unprocessed
+        return img.status != "ready"
+
+    n = len(images)
+    # Start from the image after the current one and loop around once
+    idx = (current_index + 1) % n
+    while idx != current_index:
+        candidate = images[idx]
+        if is_unprocessed(candidate):
+            return candidate
+        idx = (idx + 1) % n
+
+    # If we get here, all images for this project are processed
+    raise HTTPException(status_code=404, detail="All images in this project have been processed")
 
 
 # ============================

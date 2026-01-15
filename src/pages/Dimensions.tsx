@@ -152,20 +152,30 @@ const Dimensions = () => {
     saveAnalysis();
   }, [projectId, imageId, hasRealDimensions, maskCoverage, deselectArea, effectiveDeselectArea, usableArea, cementedArea, cementedPercent, realWidth, realHeight, unit, deselectItems]);
 
-  const handleBack = () => {
-    navigate('/drawing', { 
-      state: { 
-        // go back to the orthographic image (without the baked-in mask)
-        imageData: orthographicImage || annotatedImage,
-        originalImage,
-        maskImage,
-        deselectItems,
-        rects: rects,
-        imageId,
-        realDimensions,
-        projectId,
-      } 
-    });
+  const handleBack = async () => {
+    // If we still have orthographic + mask context from this session, allow going back to drawing
+    if (orthographicImage && projectId && imageId) {
+      navigate('/drawing', {
+        state: {
+          imageData: orthographicImage,
+          originalImage,
+          maskImage,
+          deselectItems,
+          rects,
+          imageId,
+          realDimensions,
+          projectId,
+        },
+      });
+      return;
+    }
+
+    // Otherwise, fall back to project list
+    if (projectId) {
+      navigate(`/projects/${projectId}`);
+    } else {
+      navigate('/');
+    }
   };
 
   const handleNextImage = async () => {
@@ -173,6 +183,7 @@ const Dimensions = () => {
     try {
       const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
       const token = localStorage.getItem("access_token") || "";
+
       const nextRes = await fetch(`${apiBase}/projects/${projectId}/images/${imageId}/next`, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -180,9 +191,10 @@ const Dimensions = () => {
       });
       if (!nextRes.ok) {
         const err = await nextRes.json().catch(() => ({}));
-        alert(err.detail || "No next image available");
+        alert(err.detail || "All images in this project have been processed.");
         return;
       }
+
       const nextImage = await nextRes.json();
 
       const origRes = await fetch(`${apiBase}/projects/${projectId}/images/${nextImage.id}/original`, {
@@ -207,6 +219,43 @@ const Dimensions = () => {
       // eslint-disable-next-line no-console
       console.error("Next image navigation failed", err);
       alert(err?.message || "Failed to load next image");
+    }
+  };
+
+  const handleProcessAgain = async () => {
+    if (!projectId || !imageId) return;
+
+    const confirmed = window.confirm(
+      "Re-process this image from the orthographic step? This will discard your current cement mask and de-selections for this session."
+    );
+    if (!confirmed) return;
+
+    try {
+      const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+      const token = localStorage.getItem("access_token") || "";
+
+      const origRes = await fetch(`${apiBase}/projects/${projectId}/images/${imageId}/original`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!origRes.ok) {
+        const err = await origRes.json().catch(() => ({}));
+        throw new Error(err.detail || `Failed to load original image (${origRes.status})`);
+      }
+      const origData = await origRes.json();
+
+      navigate('/corners', {
+        state: {
+          projectId,
+          imageId,
+          imageData: origData.image_data,
+        },
+      });
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("Process again navigation failed", err);
+      alert(err?.message || "Failed to restart processing for this image");
     }
   };
 
@@ -328,7 +377,7 @@ const Dimensions = () => {
                 {projectId && imageId && (
                   <div className="mt-6 flex flex-wrap gap-3 justify-between">
                     <div className="flex gap-3">
-                      <Button variant="outline" onClick={handleBack}>
+                      <Button variant="outline" onClick={handleProcessAgain}>
                         Process again
                       </Button>
                       <Button variant="outline" onClick={() => navigate(`/projects/${projectId}`)}>
